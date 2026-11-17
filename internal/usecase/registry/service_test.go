@@ -180,7 +180,7 @@ func TestService_PutManifest_SHA512DigestDoesNotPublishEvent(t *testing.T) {
 
 	manifestStorage.EXPECT().PutManifest("myapp", reference, manifest.ContentType, data).Return(nil)
 	blobStorage.EXPECT().BlobOwnedByRepository("myapp", "sha256:config").Return(true, nil)
-	blobStorage.EXPECT().BlobExists("sha256:config").Return(true)
+	blobStorage.EXPECT().GetBlobPath("sha256:config").Return("/registry/config", nil)
 
 	digest, err := svc.PutManifest(testContext(), manifest)
 
@@ -200,11 +200,33 @@ func TestService_PutManifest_RejectsOwnedButPrunedBlob(t *testing.T) {
 	manifest := &domain.Manifest{Name: "myapp", Reference: "v1", ContentType: "application/vnd.oci.image.manifest.v1+json", Data: data}
 
 	blobStorage.EXPECT().BlobOwnedByRepository("myapp", "sha256:config").Return(true, nil)
-	blobStorage.EXPECT().BlobExists("sha256:config").Return(false)
+	blobStorage.EXPECT().GetBlobPath("sha256:config").Return("", fmt.Errorf("%w: sha256:config", domain.ErrBlobNotFound))
 
 	_, err := svc.PutManifest(testContext(), manifest)
 
 	require.ErrorIs(t, err, domain.ErrManifestBlobUnknown)
+	manifestStorage.AssertNotCalled(t, "PutManifest", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestService_PutManifest_BlobStatErrorIsWrapped proves a storage error
+// other than not-found is reported as a storage failure, not as an
+// unknown blob.
+func TestService_PutManifest_BlobStatErrorIsWrapped(t *testing.T) {
+	blobStorage := mocks.NewMockBlobStorage(t)
+	manifestStorage := mocks.NewMockManifestStorage(t)
+	svc := NewService(blobStorage, manifestStorage, mocks.NewMockEventPublisher(t))
+	data := []byte(`{"schemaVersion":2,"config":{"digest":"sha256:config"}}`)
+	manifest := &domain.Manifest{Name: "myapp", Reference: "v1", ContentType: "application/vnd.oci.image.manifest.v1+json", Data: data}
+	statErr := errors.New("permission denied")
+
+	blobStorage.EXPECT().BlobOwnedByRepository("myapp", "sha256:config").Return(true, nil)
+	blobStorage.EXPECT().GetBlobPath("sha256:config").Return("", statErr)
+
+	_, err := svc.PutManifest(testContext(), manifest)
+
+	require.ErrorIs(t, err, statErr)
+	assert.NotErrorIs(t, err, domain.ErrManifestBlobUnknown)
+	assert.Contains(t, err.Error(), "verify blob storage")
 	manifestStorage.AssertNotCalled(t, "PutManifest", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 

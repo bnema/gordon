@@ -392,3 +392,72 @@ func TestPrune_EveryIndexListingAnAbsentChildIsReported(t *testing.T) {
 	assert.Contains(t, report.Plan.Warnings[0], manifestBodyDigest(first))
 	assert.Contains(t, report.Plan.Warnings[1], manifestBodyDigest(second))
 }
+
+// TestPrune_NamedTagMembershipIsCaseSensitive proves only digests compare
+// case-insensitively: Latest is a different tag from the retained latest.
+func TestPrune_NamedTagMembershipIsCaseSensitive(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	manifests := newFakeManifestStorage()
+	manifests.repositories = []string{"app"}
+	manifests.tagsByRepo["app"] = []string{"latest", "Latest", "v1"}
+	manifests.manifests[manifestRefKey("app", "latest")] = mustManifestJSON(t, testDigest("latest-config"))
+	manifests.modTimes[manifestRefKey("app", "latest")] = now
+	manifests.manifests[manifestRefKey("app", "v1")] = mustManifestJSON(t, testDigest("v1-config"))
+	manifests.modTimes[manifestRefKey("app", "v1")] = now
+	manifests.manifests[manifestRefKey("app", "Latest")] = mustManifestJSON(t, testDigest("old-config"))
+	manifests.modTimes[manifestRefKey("app", "Latest")] = now.Add(-30 * 24 * time.Hour)
+
+	svc, _ := newPruneService(t, manifests, &fakeBlobStorage{}, &fakeProtectionStore{}, &fakePruneRuntime{})
+	report, err := svc.Prune(context.Background(), domain.ImagePruneOptions{KeepLast: 1, PruneRegistry: true, DryRun: true})
+	require.NoError(t, err)
+
+	for _, candidate := range report.Plan.Candidates {
+		if candidate.Ref == "app:Latest" {
+			assert.Equal(t, domain.PruneVerdictEligible, candidate.Verdict)
+			return
+		}
+	}
+	t.Fatal("app:Latest candidate missing")
+}
+
+// TestPrune_FixpointGapMakesDigestTagsAndBlobsUnknown proves a gap found
+// while walking a newly protected digest tag still fails closed: other
+// old digest tags and unreferenced blobs become unknown.
+func TestPrune_FixpointGapMakesDigestTagsAndBlobsUnknown(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	latestBody := mustManifestJSON(t, testDigest("latest-config"))
+	mirror := manifestBodyDigest(latestBody)
+	otherBody := mustManifestJSON(t, testDigest("other-config"))
+	other := manifestBodyDigest(otherBody)
+	old := now.Add(-30 * 24 * time.Hour)
+
+	manifests := newFakeManifestStorage()
+	manifests.repositories = []string{"app"}
+	manifests.tagsByRepo["app"] = []string{"latest", "v1", mirror, other}
+	manifests.manifests[manifestRefKey("app", "latest")] = latestBody
+	manifests.modTimes[manifestRefKey("app", "latest")] = now
+	manifests.manifests[manifestRefKey("app", "v1")] = mustManifestJSON(t, testDigest("v1-config"))
+	manifests.modTimes[manifestRefKey("app", "v1")] = now
+	// The legacy mirror file names a subject that is not stored.
+	manifests.manifests[manifestRefKey("app", mirror)] = mustSubjectManifestJSON(t, testDigest("missing-subject"))
+	manifests.modTimes[manifestRefKey("app", mirror)] = old
+	manifests.manifests[manifestRefKey("app", other)] = otherBody
+	manifests.modTimes[manifestRefKey("app", other)] = old
+
+	orphan := testDigest("orphan")
+	blobs := &fakeBlobStorage{blobs: []string{orphan}, blobModTimes: map[string]time.Time{orphan: now.Add(-72 * time.Hour)}}
+	svc, _ := newPruneService(t, manifests, blobs, &fakeProtectionStore{}, &fakePruneRuntime{})
+	report, err := svc.Prune(context.Background(), domain.ImagePruneOptions{KeepLast: 1, PruneRegistry: true})
+	require.NoError(t, err)
+
+	assert.Empty(t, manifests.deletedManifests)
+	assert.Empty(t, blobs.deletedBlobs)
+	require.NotEmpty(t, report.Plan.Gaps)
+	verdicts := map[string]domain.PruneVerdict{}
+	for _, candidate := range report.Plan.Candidates {
+		verdicts[candidate.Ref] = candidate.Verdict
+	}
+	assert.Equal(t, domain.PruneVerdictProtected, verdicts["app:"+mirror])
+	assert.Equal(t, domain.PruneVerdictUnknown, verdicts["app:"+other])
+	assert.Equal(t, domain.PruneVerdictUnknown, verdicts[orphan])
+}

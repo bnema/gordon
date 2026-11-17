@@ -577,8 +577,13 @@ func newClosure() *closure {
 	}
 }
 
+// closureKey keys one manifest of a repository. Digests compare
+// case-insensitively; named tags stay case-sensitive.
 func closureKey(repository, reference string) string {
-	return repository + "\x00" + strings.ToLower(reference)
+	if domain.ValidOCIDigest(strings.ToLower(reference)) {
+		reference = strings.ToLower(reference)
+	}
+	return repository + "\x00" + reference
 }
 
 // holds reports whether the closure read this manifest in repository.

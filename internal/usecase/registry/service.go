@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -252,14 +253,8 @@ func (s *Service) validateManifestBlobs(name string, data []byte) error {
 		if descriptor.Digest == "" {
 			continue
 		}
-		owned, err := s.blobStorage.BlobOwnedByRepository(name, descriptor.Digest)
-		if err != nil {
-			return fmt.Errorf("verify blob ownership: %w", err)
-		}
-		// The ownership marker outlives a pruned blob, so the blob
-		// itself must still be stored.
-		if !owned || !s.blobStorage.BlobExists(descriptor.Digest) {
-			return fmt.Errorf("%w: %s", domain.ErrManifestBlobUnknown, descriptor.Digest)
+		if err := s.validateStoredBlob(name, descriptor.Digest); err != nil {
+			return err
 		}
 	}
 
@@ -280,6 +275,25 @@ func (s *Service) validateManifestBlobs(name string, data []byte) error {
 		if _, _, err := s.manifestStorage.GetManifest(name, descriptor.Digest); err != nil {
 			return fmt.Errorf("%w: %s", domain.ErrManifestBlobUnknown, descriptor.Digest)
 		}
+	}
+	return nil
+}
+
+// validateStoredBlob requires one blob to be owned by the repository and
+// still stored: the ownership marker outlives a pruned blob.
+func (s *Service) validateStoredBlob(name, digest string) error {
+	owned, err := s.blobStorage.BlobOwnedByRepository(name, digest)
+	if err != nil {
+		return fmt.Errorf("verify blob ownership: %w", err)
+	}
+	if !owned {
+		return fmt.Errorf("%w: %s", domain.ErrManifestBlobUnknown, digest)
+	}
+	if _, err := s.blobStorage.GetBlobPath(digest); err != nil {
+		if errors.Is(err, domain.ErrBlobNotFound) {
+			return fmt.Errorf("%w: %s", domain.ErrManifestBlobUnknown, digest)
+		}
+		return fmt.Errorf("verify blob storage: %w", err)
 	}
 	return nil
 }

@@ -81,7 +81,7 @@ func (s *BlobStorage) GetBlobPath(digest string) (string, error) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			return "", fmt.Errorf("blob not found: %s", digest)
+			return "", fmt.Errorf("%w: %s", domain.ErrBlobNotFound, digest)
 		}
 		return "", err
 	}
