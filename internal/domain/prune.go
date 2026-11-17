@@ -1342,8 +1342,9 @@ type RuntimeImage struct {
 	RepoTags []string
 	// RepoDigests are the manifest digests the runtime knows for it.
 	RepoDigests []string
-	// ParentID is the image this one was built from, when the runtime
-	// reports it. Empty means unknown, never "no children".
+	// ParentID is the image this one was built from. Empty when the
+	// runtime reports no parent (pulled and BuildKit images); a missing
+	// link never proves an image unused.
 	ParentID string
 	Labels   map[string]string
 	// Size is reported in bytes.

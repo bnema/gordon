@@ -1135,6 +1135,8 @@ const maxReleasedImagesPerService = 20
 // when its digest is known and differs from the new one, so prune can match
 // the superseded runtime image by digest once its tag is gone. A released
 // claim for the newly attached digest is dropped: the attached entry owns it.
+// A new entry without a digest still releases a previous digest: container
+// use and protection roots keep protecting it while it is in use.
 func recordImageOwnership(existing []domain.AppOwnedImage, p pinnedService) []domain.AppOwnedImage {
 	entry := domain.AppOwnedImage{
 		Service:   p.spec.Name,
@@ -1147,14 +1149,6 @@ func recordImageOwnership(existing []domain.AppOwnedImage, p pinnedService) []do
 	for _, image := range existing {
 		if image.Service != entry.Service {
 			out = append(out, image)
-			continue
-		}
-		if entry.Digest == "" {
-			// The new content cannot be named exactly: it replaces only the
-			// attached entry and leaves released history untouched.
-			if image.State == domain.AppResourceReleased && image.Digest != "" {
-				released = append(released, image)
-			}
 			continue
 		}
 		if image.Digest == "" || image.Digest == entry.Digest {

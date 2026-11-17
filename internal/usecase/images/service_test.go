@@ -207,7 +207,7 @@ type fakeManifestStorage struct {
 	listRepositoriesCalls int
 	deletedManifests      []manifestRef
 	deleteErr             error
-	modTimeErr            error
+	modTimeErrs           map[string]error
 }
 
 type fakeBlobStorage struct {
@@ -292,8 +292,8 @@ func (f *fakeManifestStorage) ListTags(name string) ([]string, error) {
 }
 
 func (f *fakeManifestStorage) GetManifestModTime(name, reference string) (time.Time, error) {
-	if f.modTimeErr != nil {
-		return time.Time{}, f.modTimeErr
+	if err := f.modTimeErrs[manifestRefKey(name, reference)]; err != nil {
+		return time.Time{}, err
 	}
 	modTime, ok := f.modTimes[manifestRefKey(name, reference)]
 	if !ok {
@@ -404,4 +404,26 @@ func TestIsDanglingImage(t *testing.T) {
 			assert.Equal(t, tt.want, isDanglingImage(tt.tags))
 		})
 	}
+}
+
+func TestService_ListImages_PodmanDigestOnlyImageIsDangling(t *testing.T) {
+	ref := "reg.example.com/app@sha256:" + strings.Repeat("a", 64)
+	rt := &fakeRuntime{
+		listDetails: []pkgruntime.ImageDetail{{
+			ID:       "sha256:superseded",
+			RepoTags: []string{ref},
+			Size:     100,
+			Created:  time.Date(2026, 2, 8, 13, 0, 0, 0, time.UTC),
+		}},
+	}
+
+	svc := NewService(rt, newFakeManifestStorage(), noopBlobStorage{}, zerowrap.Default())
+	images, err := svc.ListImages(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, images, 1)
+	assert.Equal(t, "sha256:superseded", images[0].ID)
+	assert.Empty(t, images[0].Repository)
+	assert.Empty(t, images[0].Tag)
+	assert.True(t, images[0].Dangling)
 }

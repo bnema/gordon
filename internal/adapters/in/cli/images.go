@@ -450,9 +450,9 @@ func renderPruneConfirmPrompt(preview prunePreview, keepReleases int, pruneDangl
 	lines := []string{"Prune images? This cannot be undone.", ""}
 
 	if pruneDangling {
-		lines = append(lines, fmt.Sprintf("Runtime: would prune %d dangling runtime images", preview.danglingRuntimeCount))
+		lines = append(lines, fmt.Sprintf("Runtime: %d untagged runtime images found (the server decides which are safe to prune)", preview.danglingRuntimeCount))
 		if includeUnmanaged {
-			lines = append(lines, "Runtime: including untagged images not created by Gordon")
+			lines = append(lines, "Runtime: including untagged images with no Gordon ownership record (may include older Gordon images)")
 		}
 	} else {
 		lines = append(lines, "Runtime: cleanup skipped (--registry)")

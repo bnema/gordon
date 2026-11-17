@@ -163,8 +163,9 @@ func planRuntimeImage(image domain.RuntimeImage, uses containerUseIndex, input R
 // only for lacking Gordon provenance is released by the operator opt-in.
 // Callers reach it after the tag and container-use gates, so the image is
 // already proven untagged and unused; the completeness gate still applies.
-// A parent of another inventoried image is never released: removing it
-// would only untag a layer chain still in use.
+// A parent of another inventoried image is never released: the runtime
+// refuses to remove an image with children; these are mostly build
+// intermediates listed by All:true.
 func optedInUnmanaged(image domain.RuntimeImage, reasons []domain.PruneReason, uses containerUseIndex, input RuntimePlanInput) bool {
 	if _, parent := uses.parentIDs[image.ID]; parent {
 		return false

@@ -523,20 +523,85 @@ func TestManifestReadFailureDetail(t *testing.T) {
 }
 
 // TestPrune_StaleTagYieldsOneNotFoundGap proves a tag whose manifest is
-// gone reports a not-found gap and no separate modtime gap.
+// gone reports a not-found gap and no separate modtime gap, and that the
+// gap keeps the tag and every stored blob from being deleted.
 func TestPrune_StaleTagYieldsOneNotFoundGap(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	manifests := newFakeManifestStorage()
 	manifests.repositories = []string{"app"}
-	manifests.tagsByRepo["app"] = []string{"stale"}
-	manifests.modTimeErr = fmt.Errorf("%w: app/stale", domain.ErrManifestNotFound)
+	manifests.tagsByRepo["app"] = []string{"latest", "stale", "v2"}
+	manifests.manifests[manifestRefKey("app", "latest")] = []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"` + testDigest("cfg") + `"},"layers":[]}`)
+	manifests.manifests[manifestRefKey("app", "v2")] = manifests.manifests[manifestRefKey("app", "latest")]
+	manifests.modTimes[manifestRefKey("app", "latest")] = now
+	manifests.modTimes[manifestRefKey("app", "v2")] = now.Add(-time.Hour)
+	manifests.modTimeErrs = map[string]error{manifestRefKey("app", "stale"): fmt.Errorf("%w: app/stale", domain.ErrManifestNotFound)}
+	orphan := testDigest("orphan")
+	blobs := &fakeBlobStorage{
+		blobs:        []string{orphan},
+		blobModTimes: map[string]time.Time{orphan: now.Add(-72 * time.Hour)},
+	}
 
-	svc, _ := newPruneService(t, manifests, &fakeBlobStorage{}, &fakeProtectionStore{}, &fakePruneRuntime{})
+	svc, _ := newPruneService(t, manifests, blobs, &fakeProtectionStore{}, &fakePruneRuntime{})
 	report, err := svc.Prune(context.Background(), domain.ImagePruneOptions{KeepLast: 1, PruneRegistry: true})
 	require.NoError(t, err)
 
 	require.NotEmpty(t, report.Plan.Gaps)
-	assert.Equal(t, "manifest not found for app:stale", report.Plan.Gaps[0].Detail)
+	var notFound bool
+	for _, gap := range report.Plan.Gaps {
+		notFound = notFound || gap.Detail == "manifest not found for app:stale"
+	}
+	assert.True(t, notFound, "gaps: %+v", report.Plan.Gaps)
 	for _, gap := range report.Plan.Gaps {
 		assert.NotContains(t, gap.Detail, "modification time", "a missing manifest must not add a modtime gap")
 	}
+	assertNothingEligible(t, report)
+	assert.Empty(t, manifests.deletedManifests)
+	assert.Empty(t, blobs.deletedBlobs)
+}
+
+// TestPrune_ModTimeNotFoundWithReadableManifestFailsClosed proves a modtime
+// failure is a gap when the manifest itself is readable.
+func TestPrune_ModTimeNotFoundWithReadableManifestFailsClosed(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	manifests := newFakeManifestStorage()
+	manifests.repositories = []string{"app"}
+	manifests.tagsByRepo["app"] = []string{"latest", "v1", "v2"}
+	manifests.manifests[manifestRefKey("app", "latest")] = []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"` + testDigest("cfg") + `"},"layers":[]}`)
+	manifests.manifests[manifestRefKey("app", "v2")] = manifests.manifests[manifestRefKey("app", "latest")]
+	manifests.modTimes[manifestRefKey("app", "latest")] = now
+	manifests.modTimes[manifestRefKey("app", "v2")] = now.Add(-time.Hour)
+	manifests.manifests[manifestRefKey("app", "v1")] = manifests.manifests[manifestRefKey("app", "latest")]
+	manifests.modTimeErrs = map[string]error{manifestRefKey("app", "v1"): fmt.Errorf("%w: app/v1", domain.ErrManifestNotFound)}
+	orphan := testDigest("orphan")
+	blobs := &fakeBlobStorage{
+		blobs:        []string{orphan},
+		blobModTimes: map[string]time.Time{orphan: now.Add(-72 * time.Hour)},
+	}
+
+	svc, _ := newPruneService(t, manifests, blobs, &fakeProtectionStore{}, &fakePruneRuntime{})
+	report, err := svc.Prune(context.Background(), domain.ImagePruneOptions{KeepLast: 1, PruneRegistry: true})
+	require.NoError(t, err)
+
+	var modTimeGap bool
+	for _, gap := range report.Plan.Gaps {
+		if gap.Detail == "manifest modification time not found for app:v1" {
+			modTimeGap = true
+		}
+	}
+	assert.True(t, modTimeGap, "gaps: %+v", report.Plan.Gaps)
+	assertNothingEligible(t, report)
+	assert.Empty(t, manifests.deletedManifests)
+	assert.Empty(t, blobs.deletedBlobs)
+}
+
+func assertNothingEligible(t *testing.T, report domain.ImagePruneReport) {
+	t.Helper()
+	var unknownTag bool
+	for _, candidate := range report.Plan.Candidates {
+		assert.NotEqual(t, domain.PruneVerdictEligible, candidate.Verdict, "%s %s", candidate.Kind, candidate.Ref)
+		if candidate.Kind == domain.PruneResourceRegistryTag && candidate.Verdict == domain.PruneVerdictUnknown {
+			unknownTag = true
+		}
+	}
+	assert.True(t, unknownTag, "the affected tag must be unknown: %+v", report.Plan.Candidates)
 }

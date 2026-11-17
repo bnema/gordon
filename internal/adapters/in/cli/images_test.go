@@ -448,7 +448,7 @@ func TestRunImagesPrune_ConfirmPromptIncludesScopePreviewCounts(t *testing.T) {
 	err := runImagesPrune(context.Background(), client, opts, &out)
 	require.NoError(t, err)
 
-	assert.Contains(t, prompt, "Runtime: would prune 1 dangling runtime images")
+	assert.Contains(t, prompt, "Runtime: 1 untagged runtime images found (the server decides which are safe to prune)")
 	assert.Contains(t, prompt, "Registry: would prune 1 tags")
 	assert.Equal(t, 1, client.listImagesCalls)
 	assert.Equal(t, 0, client.pruneCalls)
@@ -644,7 +644,7 @@ func TestRunImagesPrune_IncludeUnmanagedDanglingIsSent(t *testing.T) {
 }
 
 func TestRenderPruneConfirmPrompt_IncludeUnmanagedDangling(t *testing.T) {
-	const line = "Runtime: including untagged images not created by Gordon"
+	const line = "Runtime: including untagged images with no Gordon ownership record (may include older Gordon images)"
 	assert.Contains(t, renderPruneConfirmPrompt(prunePreview{}, 3, true, true, true), line)
 	assert.NotContains(t, renderPruneConfirmPrompt(prunePreview{}, 3, true, true, false), line)
 	assert.NotContains(t, renderPruneConfirmPrompt(prunePreview{}, 3, false, true, true), line)

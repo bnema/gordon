@@ -78,7 +78,7 @@ func TestRecordImageOwnership(t *testing.T) {
 			want:     []domain.AppOwnedImage{ownedImage("v2", v2, domain.AppResourceAttached)},
 		},
 		{
-			name: "new entry without digest replaces only the attached entry",
+			name: "new entry without digest still releases the previous digest",
 			existing: []domain.AppOwnedImage{
 				ownedImage("v0", "", domain.AppResourceReleased),
 				ownedImage("v1", v1, domain.AppResourceReleased),
@@ -87,6 +87,7 @@ func TestRecordImageOwnership(t *testing.T) {
 			pinned: pinnedWeb("v3", ""),
 			want: []domain.AppOwnedImage{
 				ownedImage("v1", v1, domain.AppResourceReleased),
+				ownedImage("v2", v2, domain.AppResourceReleased),
 				ownedImage("v3", "", domain.AppResourceAttached),
 			},
 		},

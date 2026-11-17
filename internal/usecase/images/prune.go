@@ -262,18 +262,19 @@ func (s *Service) inventoryRepository(repository string) ([]pruneguard.RegistryT
 			continue
 		}
 		candidate := pruneguard.RegistryTagCandidate{Ref: ref}
-		modTime, err := s.manifestStorage.GetManifestModTime(repository, tagName)
-		// A missing manifest is reported once, by the manifest read below.
-		if err != nil && !errors.Is(err, domain.ErrManifestNotFound) {
-			gaps = append(gaps, domain.InventoryGap{
-				Source: domain.InventorySourceRegistry,
-				Reason: domain.PruneReasonUnknownInventory,
-				Detail: manifestReadFailureDetail("manifest modification time", ref.String(), err),
-			})
-		}
+		modTime, modTimeErr := s.manifestStorage.GetManifestModTime(repository, tagName)
 		candidate.ModTime = modTime
 
 		data, _, err := s.manifestStorage.GetManifest(repository, tagName)
+		// A manifest that cannot be read is reported once, by its own gap.
+		// A modtime failure on a readable manifest still fails closed.
+		if modTimeErr != nil && err == nil {
+			gaps = append(gaps, domain.InventoryGap{
+				Source: domain.InventorySourceRegistry,
+				Reason: domain.PruneReasonUnknownInventory,
+				Detail: manifestReadFailureDetail("manifest modification time", ref.String(), modTimeErr),
+			})
+		}
 		if err != nil {
 			gaps = append(gaps, domain.InventoryGap{
 				Source: domain.InventorySourceManifests,
