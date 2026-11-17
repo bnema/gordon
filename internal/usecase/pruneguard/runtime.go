@@ -260,7 +260,13 @@ func imageClaimVerdict(image domain.RuntimeImage, snapshot *domain.PruneProtecti
 func imageIdentities(image domain.RuntimeImage) []string {
 	identities := make([]string, 0, 1+len(image.RepoTags)+2*len(image.RepoDigests))
 	identities = append(identities, image.ID)
+	repoDigests := image.RepoDigests
 	for _, repoTag := range image.RepoTags {
+		if domain.IsDigestOnlyImageRef(repoTag) {
+			// Podman lists digest pulls in RepoTags: keep the identity.
+			repoDigests = append(repoDigests, repoTag)
+			continue
+		}
 		if domain.IsPlaceholderRepoTag(repoTag) {
 			continue
 		}
@@ -269,7 +275,7 @@ func imageIdentities(image domain.RuntimeImage) []string {
 			identities = append(identities, tagRef.Key())
 		}
 	}
-	for _, repoDigest := range image.RepoDigests {
+	for _, repoDigest := range repoDigests {
 		if repoDigest == "" {
 			continue
 		}

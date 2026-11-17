@@ -128,22 +128,35 @@ func deployOwnership(t *testing.T, store *appstate.Store, deploys ...pinnedServi
 	}
 }
 
+// podmanDigestImage is a digest-pulled image as Podman's compat API lists
+// it: the digest reference appears in both RepoTags and RepoDigests.
+func podmanDigestImage(id, digest string) domain.RuntimeImage {
+	ref := testImageRepo + "@" + digest
+	return domain.RuntimeImage{
+		ID:          id,
+		RepoTags:    []string{ref},
+		RepoDigests: []string{ref},
+		Labels:      map[string]string{domain.LabelApp: "shop"},
+	}
+}
+
 func planSupersededImage(t *testing.T, store *appstate.Store, digest string) domain.RuntimeImageVerdict {
+	t.Helper()
+	verdicts := planImages(t, store, nil, podmanDigestImage(testOwnedDigest("f"), digest))
+	require.Len(t, verdicts, 1)
+	return verdicts[0]
+}
+
+func planImages(t *testing.T, store *appstate.Store, containers []domain.RuntimeContainerUse, images ...domain.RuntimeImage) []domain.RuntimeImageVerdict {
 	t.Helper()
 	snapshot, err := store.ProtectionSnapshot(context.Background())
 	require.NoError(t, err)
-	verdicts := pruneguard.PlanRuntimeImages(pruneguard.RuntimePlanInput{
-		Images: []domain.RuntimeImage{{
-			ID:          testOwnedDigest("f"),
-			RepoTags:    []string{testImageRepo + ":<none>"},
-			RepoDigests: []string{testImageRepo + "@" + digest},
-			Labels:      map[string]string{domain.LabelApp: "shop"},
-		}},
-		Snapshot: snapshot,
-		Complete: true,
+	return pruneguard.PlanRuntimeImages(pruneguard.RuntimePlanInput{
+		Images:     images,
+		Containers: containers,
+		Snapshot:   snapshot,
+		Complete:   true,
 	})
-	require.Len(t, verdicts, 1)
-	return verdicts[0]
 }
 
 // TestSupersededImageIsPrunableAcrossSeam drives deploy ownership through
@@ -156,9 +169,18 @@ func TestSupersededImageIsPrunableAcrossSeam(t *testing.T) {
 		require.NoError(t, err)
 		deployOwnership(t, store, pinnedWeb("v1", v1), pinnedWeb("v2", v2))
 
-		verdict := planSupersededImage(t, store, v1)
-		assert.Equal(t, domain.PruneVerdictEligible, verdict.Verdict)
-		assert.Equal(t, []domain.PruneReason{domain.PruneReasonEligibleDanglingRuntimeImage}, verdict.Reasons)
+		v1ID, v2ID := testOwnedDigest("e"), testOwnedDigest("f")
+		verdicts := planImages(t, store,
+			[]domain.RuntimeContainerUse{{ContainerID: "web-v2", ImageID: v2ID}},
+			podmanDigestImage(v1ID, v1), podmanDigestImage(v2ID, v2))
+		require.Len(t, verdicts, 2)
+		byID := map[string]domain.RuntimeImageVerdict{}
+		for _, verdict := range verdicts {
+			byID[verdict.Ref.ID] = verdict
+		}
+		assert.Equal(t, domain.PruneVerdictEligible, byID[v1ID].Verdict)
+		assert.Equal(t, []domain.PruneReason{domain.PruneReasonEligibleDanglingRuntimeImage}, byID[v1ID].Reasons)
+		assert.Equal(t, domain.PruneVerdictProtected, byID[v2ID].Verdict, "the active image is used by a container")
 	})
 
 	t.Run("rollback to v1 keeps v1 attached", func(t *testing.T) {

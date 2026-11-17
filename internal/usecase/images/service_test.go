@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -393,6 +394,8 @@ func TestIsDanglingImage(t *testing.T) {
 		{"no tags", nil, true},
 		{"docker placeholder", []string{"<none>:<none>"}, true},
 		{"podman superseded", []string{"localhost/shop:<none>"}, true},
+		{"podman digest pull", []string{"localhost:5000/shop@sha256:" + strings.Repeat("a", 64)}, true},
+		{"tag with digest", []string{"localhost:5000/shop:v1@sha256:" + strings.Repeat("a", 64)}, false},
 		{"real tag", []string{"reg/shop:v2"}, false},
 		{"mixed", []string{"reg/shop:v2", "reg/shop:<none>"}, false},
 	}

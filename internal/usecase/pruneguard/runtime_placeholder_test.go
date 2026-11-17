@@ -18,7 +18,12 @@ func TestDomainIsPlaceholderRepoTag(t *testing.T) {
 		{"registry.example.com/shop:<none>", true},
 		{"localhost:5000/shop:<none>", true},
 		{"localhost/x:<none>", true},
-		{"reg.example.com/shop@" + digest("a"), false},
+		{"localhost:5000/app@" + digest("a"), true},
+		{"reg.example.com/shop@" + digest("a"), true},
+		{"reg.example.com/app:v1@" + digest("a"), false},
+		{"localhost:5000/app:v1@" + digest("a"), false},
+		{"localhost:5000/app@sha256:nothex", false},
+		{"@" + digest("a"), false},
 		{"<none>@" + digest("a"), true},
 		{"registry.example.com/shop:v1", false},
 		{"localhost:5000/shop:latest", false},
@@ -223,5 +228,23 @@ func TestPlanRuntimeImagesBareDigestRootProtectsReleasedImage(t *testing.T) {
 				t.Fatalf("verdict = %v %v, want protected", verdicts[0].Verdict, verdicts[0].Reasons)
 			}
 		})
+	}
+}
+
+// TestPlanRuntimeImagesDigestRepoTagKeepsIdentity proves a digest-only
+// RepoTags entry still identifies the image for roots, even when the
+// runtime reports no RepoDigests.
+func TestPlanRuntimeImagesDigestRepoTagKeepsIdentity(t *testing.T) {
+	contentDigest := digest("e")
+	verdicts := PlanRuntimeImages(RuntimePlanInput{
+		Images: []domain.RuntimeImage{{ID: digest("f"), RepoTags: []string{"localhost:5000/app@" + contentDigest}}},
+		Snapshot: &domain.PruneProtectionSnapshot{
+			Roots: []domain.ProtectionRoot{{Kind: domain.ProtectionActiveService, Ref: contentDigest, Owner: "app"}},
+		},
+		Complete: true,
+	})
+	want := []domain.PruneReason{domain.PruneReasonProtectedActiveService}
+	if verdicts[0].Verdict != domain.PruneVerdictProtected || !reflect.DeepEqual(verdicts[0].Reasons, want) {
+		t.Fatalf("verdict = %v %v, want protected %v", verdicts[0].Verdict, verdicts[0].Reasons, want)
 	}
 }

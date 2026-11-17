@@ -1391,7 +1391,10 @@ func (i *RuntimeInventory) Complete() bool {
 // IsPlaceholderRepoTag reports whether a runtime repo tag is a placeholder
 // rather than a usable tag. Docker reports "<none>:<none>"; Podman keeps
 // the repository of a superseded image and reports "<repo>:<none>"; a
-// digest-only "<none>@sha256:..." entry names no tag either.
+// digest-only "<none>@sha256:..." entry names no tag either. Podman also
+// lists a digest-pulled image as a pure digest reference "repo@sha256:..."
+// in RepoTags (shown as "repo:<none>" by `podman images`), which is not a
+// tag. "repo:tag@sha256:..." keeps its tag.
 func IsPlaceholderRepoTag(tag string) bool {
 	switch {
 	case tag == "", tag == "<none>":
@@ -1401,6 +1404,17 @@ func IsPlaceholderRepoTag(tag string) bool {
 	case strings.HasPrefix(tag, "<none>@"):
 		return true
 	default:
+		return IsDigestOnlyImageRef(tag)
+	}
+}
+
+// IsDigestOnlyImageRef reports whether ref is "name@<algo>:<hex>" with a
+// valid digest and no tag on the name.
+func IsDigestOnlyImageRef(ref string) bool {
+	name, digest, ok := strings.Cut(ref, "@")
+	if !ok || name == "" || !ValidOCIDigest(digest) {
 		return false
 	}
+	// A tag is a ':' after the last '/'; a ':' before it is a registry port.
+	return !strings.Contains(name[strings.LastIndex(name, "/")+1:], ":")
 }
