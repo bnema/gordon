@@ -116,7 +116,7 @@ func planRuntimeImage(image domain.RuntimeImage, uses containerUseIndex, input R
 	// against tag-keyed roots as well as digests.
 	refs := append([]string{image.ID}, image.RepoDigests...)
 	for _, repoTag := range image.RepoTags {
-		if repoTag == "" || repoTag == "<none>:<none>" || repoTag == "<none>" {
+		if isPlaceholderRepoTag(repoTag) {
 			continue
 		}
 		refs = append(refs, repoTag)
@@ -230,7 +230,7 @@ func imageIdentities(image domain.RuntimeImage) []string {
 	identities := make([]string, 0, 1+len(image.RepoTags)+2*len(image.RepoDigests))
 	identities = append(identities, image.ID)
 	for _, repoTag := range image.RepoTags {
-		if repoTag == "" || repoTag == "<none>:<none>" || repoTag == "<none>" {
+		if isPlaceholderRepoTag(repoTag) {
 			continue
 		}
 		identities = append(identities, repoTag)
@@ -254,10 +254,27 @@ func imageIdentities(image domain.RuntimeImage) []string {
 // image. Placeholder tags never count.
 func hasRepoTags(repoTags []string) bool {
 	for _, tag := range repoTags {
-		if tag == "" || tag == "<none>:<none>" || tag == "<none>" {
+		if isPlaceholderRepoTag(tag) {
 			continue
 		}
 		return true
 	}
 	return false
+}
+
+// isPlaceholderRepoTag reports whether a runtime repo tag is a placeholder
+// rather than a usable tag. Docker reports "<none>:<none>"; Podman keeps
+// the repository of a superseded image and reports "<repo>:<none>"; a
+// digest-only "<none>@sha256:..." entry names no tag either.
+func isPlaceholderRepoTag(tag string) bool {
+	switch {
+	case tag == "", tag == "<none>":
+		return true
+	case strings.HasSuffix(tag, ":<none>"):
+		return true
+	case strings.HasPrefix(tag, "<none>@"):
+		return true
+	default:
+		return false
+	}
 }
