@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -326,8 +328,7 @@ func TestPrune_MissingChildManifestMakesUnreferencedBlobsUnknown(t *testing.T) {
 	require.NotEmpty(t, report.Plan.Gaps)
 	var notFoundDetail bool
 	for _, gap := range report.Plan.Gaps {
-		if strings.HasPrefix(gap.Detail, "retained manifest not found for app@") &&
-			strings.Contains(gap.Detail, domain.ErrManifestNotFound.Error()) {
+		if strings.HasPrefix(gap.Detail, "retained manifest not found for app@") {
 			notFoundDetail = true
 		}
 	}
@@ -501,7 +502,12 @@ func TestManifestReadFailureDetail(t *testing.T) {
 		{
 			name: "not found",
 			err:  fmt.Errorf("%w: app/v1", domain.ErrManifestNotFound),
-			want: "manifest not found for app:v1: manifest not found: app/v1",
+			want: "manifest not found for app:v1",
+		},
+		{
+			name: "path error drops the host path",
+			err:  fmt.Errorf("failed to read manifest: %w", &fs.PathError{Op: "open", Path: "/srv/gordon/registry/app/v1", Err: syscall.EACCES}),
+			want: "manifest unreadable for app:v1: open: permission denied",
 		},
 		{
 			name: "other read error",
@@ -513,5 +519,24 @@ func TestManifestReadFailureDetail(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, manifestReadFailureDetail("manifest", "app:v1", tt.err))
 		})
+	}
+}
+
+// TestPrune_StaleTagYieldsOneNotFoundGap proves a tag whose manifest is
+// gone reports a not-found gap and no separate modtime gap.
+func TestPrune_StaleTagYieldsOneNotFoundGap(t *testing.T) {
+	manifests := newFakeManifestStorage()
+	manifests.repositories = []string{"app"}
+	manifests.tagsByRepo["app"] = []string{"stale"}
+	manifests.modTimeErr = fmt.Errorf("%w: app/stale", domain.ErrManifestNotFound)
+
+	svc, _ := newPruneService(t, manifests, &fakeBlobStorage{}, &fakeProtectionStore{}, &fakePruneRuntime{})
+	report, err := svc.Prune(context.Background(), domain.ImagePruneOptions{KeepLast: 1, PruneRegistry: true})
+	require.NoError(t, err)
+
+	require.NotEmpty(t, report.Plan.Gaps)
+	assert.Equal(t, "manifest not found for app:stale", report.Plan.Gaps[0].Detail)
+	for _, gap := range report.Plan.Gaps {
+		assert.NotContains(t, gap.Detail, "modification time", "a missing manifest must not add a modtime gap")
 	}
 }

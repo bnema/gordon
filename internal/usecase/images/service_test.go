@@ -206,6 +206,7 @@ type fakeManifestStorage struct {
 	listRepositoriesCalls int
 	deletedManifests      []manifestRef
 	deleteErr             error
+	modTimeErr            error
 }
 
 type fakeBlobStorage struct {
@@ -290,6 +291,9 @@ func (f *fakeManifestStorage) ListTags(name string) ([]string, error) {
 }
 
 func (f *fakeManifestStorage) GetManifestModTime(name, reference string) (time.Time, error) {
+	if f.modTimeErr != nil {
+		return time.Time{}, f.modTimeErr
+	}
 	modTime, ok := f.modTimes[manifestRefKey(name, reference)]
 	if !ok {
 		return time.Time{}, errors.New("manifest modtime not found")

@@ -1121,10 +1121,11 @@ func (s *Service) recordOwnership(ctx context.Context, app string, p pinnedServi
 }
 
 // maxReleasedImagesPerService bounds the superseded images kept as
-// released claims per service. Registry retention keeps latest plus three
-// previous tags by default, so five covers it; a dropped claim falls back
-// to label provenance, which never authorizes deletion.
-const maxReleasedImagesPerService = 5
+// released claims per service. Released claims accumulate with each deploy
+// that changes the digest until prune reclaims the images, so the limit is
+// the number of such deploys between prunes. A dropped claim falls back to
+// label provenance, which never authorizes deletion.
+const maxReleasedImagesPerService = 20
 
 // recordImageOwnership stamps one service's pinned image into the app's
 // owned-image list. Positive durable ownership is what later authorizes
@@ -1148,7 +1149,15 @@ func recordImageOwnership(existing []domain.AppOwnedImage, p pinnedService) []do
 			out = append(out, image)
 			continue
 		}
-		if image.Digest == "" || entry.Digest == "" || image.Digest == entry.Digest {
+		if entry.Digest == "" {
+			// The new content cannot be named exactly: it replaces only the
+			// attached entry and leaves released history untouched.
+			if image.State == domain.AppResourceReleased && image.Digest != "" {
+				released = append(released, image)
+			}
+			continue
+		}
+		if image.Digest == "" || image.Digest == entry.Digest {
 			// Same content, or content we cannot name exactly: the new
 			// attached entry replaces it.
 			continue

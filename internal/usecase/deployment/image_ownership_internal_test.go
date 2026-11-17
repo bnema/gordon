@@ -78,10 +78,17 @@ func TestRecordImageOwnership(t *testing.T) {
 			want:     []domain.AppOwnedImage{ownedImage("v2", v2, domain.AppResourceAttached)},
 		},
 		{
-			name:     "new entry without digest releases nothing",
-			existing: []domain.AppOwnedImage{ownedImage("v1", v1, domain.AppResourceAttached)},
-			pinned:   pinnedWeb("v2", ""),
-			want:     []domain.AppOwnedImage{ownedImage("v2", "", domain.AppResourceAttached)},
+			name: "new entry without digest replaces only the attached entry",
+			existing: []domain.AppOwnedImage{
+				ownedImage("v0", "", domain.AppResourceReleased),
+				ownedImage("v1", v1, domain.AppResourceReleased),
+				ownedImage("v2", v2, domain.AppResourceAttached),
+			},
+			pinned: pinnedWeb("v3", ""),
+			want: []domain.AppOwnedImage{
+				ownedImage("v1", v1, domain.AppResourceReleased),
+				ownedImage("v3", "", domain.AppResourceAttached),
+			},
 		},
 	}
 	for _, tt := range tests {
@@ -93,7 +100,7 @@ func TestRecordImageOwnership(t *testing.T) {
 
 func TestRecordImageOwnershipCapsReleasedEntries(t *testing.T) {
 	var images []domain.AppOwnedImage
-	seeds := "123456789"
+	seeds := "0123456789abcdefghijklmnopqrstuvwxyz"
 	for _, seed := range seeds {
 		images = recordImageOwnership(images, pinnedWeb("v"+string(seed), testOwnedDigest(string(seed))))
 	}
@@ -104,7 +111,7 @@ func TestRecordImageOwnershipCapsReleasedEntries(t *testing.T) {
 		assert.Equal(t, testOwnedDigest(seed), image.Digest, "oldest released entries are dropped first")
 		assert.Equal(t, domain.AppResourceReleased, image.State)
 	}
-	assert.Equal(t, ownedImage("v9", testOwnedDigest("9"), domain.AppResourceAttached), images[len(images)-1])
+	assert.Equal(t, ownedImage("vz", testOwnedDigest("z"), domain.AppResourceAttached), images[len(images)-1])
 }
 
 // deployOwnership records each pinned digest in turn through the durable
@@ -179,6 +186,17 @@ func TestSupersededImageIsPrunableAcrossSeam(t *testing.T) {
 		verdict := planSupersededImage(t, store, v1)
 		assert.Equal(t, domain.PruneVerdictProtected, verdict.Verdict)
 		assert.Equal(t, []domain.PruneReason{domain.PruneReasonProtectedActiveService}, verdict.Reasons)
+	})
+
+	t.Run("digest still attached by another service stays protected", func(t *testing.T) {
+		store, err := appstate.NewStore(t.TempDir(), zerowrap.Default())
+		require.NoError(t, err)
+		worker := pinnedService{name: "worker", spec: domain.AppService{Name: "worker", Image: testImageRepo + ":v1"}, digest: v1}
+		deployOwnership(t, store, pinnedWeb("v1", v1), worker, pinnedWeb("v2", v2))
+
+		verdict := planSupersededImage(t, store, v1)
+		assert.Equal(t, domain.PruneVerdictProtected, verdict.Verdict)
+		assert.Equal(t, []domain.PruneReason{domain.PruneReasonProtectedOwnership}, verdict.Reasons)
 	})
 
 	t.Run("retire keeps released entries released without duplicates", func(t *testing.T) {

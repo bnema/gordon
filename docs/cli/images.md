@@ -252,7 +252,7 @@ Gordon prunes by ownership, not by name or age. Each candidate gets one verdict:
 
 Runtime images used by any container, running or stopped, always survive. Registry blobs reachable from a retained or protected manifest survive, including blobs shared with another tag. When a retained manifest cannot be read, the blobs whose safety depended on it become `unknown` rather than eligible.
 
-A runtime image counts as untagged when its tags are placeholders such as `<none>:<none>` or `<repo>:<none>` (how Podman keeps superseded images). Untagged images with no Gordon provenance are `protected-unmanaged` by default. `--include-unmanaged-dangling` makes them `eligible` (`eligible-unmanaged-dangling-image`) when no container uses them and the inventory is complete.
+A runtime image counts as untagged when its tags are placeholders such as `<none>:<none>` or `<repo>:<none>` (how Podman keeps superseded images). A deploy that replaces a service's image with a different digest releases the previous one; Gordon keeps the 20 most recent released images per service. Untagged images with no Gordon provenance are `protected-unmanaged` by default. `--include-unmanaged-dangling` makes them `eligible` (`eligible-unmanaged-dangling-image`) when no container uses them and the inventory is complete.
 
 Each inventory gap names the resource and the underlying error. For registry manifests it tells a missing manifest (`not found`, for example a stale tag entry) from a read or parse failure.
 

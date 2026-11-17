@@ -253,7 +253,7 @@ func (s *ManifestStorage) GetManifestModTime(name, reference string) (time.Time,
 	info, err := os.Stat(manifestPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return time.Time{}, fmt.Errorf("manifest not found: %s/%s", name, reference)
+			return time.Time{}, fmt.Errorf("%w: %s/%s", domain.ErrManifestNotFound, name, reference)
 		}
 		return time.Time{}, fmt.Errorf("failed to stat manifest: %w", err)
 	}

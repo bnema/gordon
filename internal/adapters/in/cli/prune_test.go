@@ -16,12 +16,12 @@ func TestCliRenderPruneSummary_ShowsGapDetail(t *testing.T) {
 		Gaps: []dto.PruneGap{{
 			Source: "manifests",
 			Reason: "unknown-manifest-unreadable",
-			Detail: "manifest not found for app:v1: manifest not found: app/v1",
+			Detail: "manifest not found for app:v1",
 		}},
 	}
 
 	require.NoError(t, cliRenderPruneSummary(&out, summary))
 
-	assert.Contains(t, out.String(), "unknown-manifest-unreadable")
-	assert.Contains(t, out.String(), "manifest not found for app:v1")
+	assert.Contains(t, out.String(),
+		"inventory incomplete (manifests: unknown-manifest-unreadable: manifest not found for app:v1); dependent candidates were left untouched\n")
 }

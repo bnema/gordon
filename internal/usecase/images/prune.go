@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"sort"
 	"time"
 
@@ -262,11 +263,12 @@ func (s *Service) inventoryRepository(repository string) ([]pruneguard.RegistryT
 		}
 		candidate := pruneguard.RegistryTagCandidate{Ref: ref}
 		modTime, err := s.manifestStorage.GetManifestModTime(repository, tagName)
-		if err != nil {
+		// A missing manifest is reported once, by the manifest read below.
+		if err != nil && !errors.Is(err, domain.ErrManifestNotFound) {
 			gaps = append(gaps, domain.InventoryGap{
 				Source: domain.InventorySourceRegistry,
 				Reason: domain.PruneReasonUnknownInventory,
-				Detail: "manifest modification time unreadable for " + ref.String() + ": " + err.Error(),
+				Detail: manifestReadFailureDetail("manifest modification time", ref.String(), err),
 			})
 		}
 		candidate.ModTime = modTime
@@ -287,7 +289,7 @@ func (s *Service) inventoryRepository(repository string) ([]pruneguard.RegistryT
 			gaps = append(gaps, domain.InventoryGap{
 				Source: domain.InventorySourceManifests,
 				Reason: domain.PruneReasonUnknownManifest,
-				Detail: "manifest parse failed for " + ref.String() + ": " + err.Error(),
+				Detail: "manifest parse failed for " + ref.String() + ": " + gapErrorText(err),
 			})
 			candidates = append(candidates, candidate)
 			continue
@@ -535,7 +537,7 @@ func (s *Service) traverseClosure(root retainedRoot, c *closure) {
 		c.gaps = append(c.gaps, domain.InventoryGap{
 			Source: domain.InventorySourceManifests,
 			Reason: domain.PruneReasonUnknownManifest,
-			Detail: "retained manifest parse failed for " + root.Repository + "@" + root.Reference + ": " + err.Error(),
+			Detail: "retained manifest parse failed for " + root.Repository + "@" + root.Reference + ": " + gapErrorText(err),
 		})
 		return
 	}
@@ -567,9 +569,19 @@ func (s *Service) traverseClosure(root retainedRoot, c *closure) {
 // other read error. Both stay inventory gaps.
 func manifestReadFailureDetail(what, ref string, err error) string {
 	if errors.Is(err, domain.ErrManifestNotFound) {
-		return what + " not found for " + ref + ": " + err.Error()
+		return what + " not found for " + ref
 	}
-	return what + " unreadable for " + ref + ": " + err.Error()
+	return what + " unreadable for " + ref + ": " + gapErrorText(err)
+}
+
+// gapErrorText renders an error for a gap detail without host paths: a
+// filesystem error keeps only its operation and cause.
+func gapErrorText(err error) string {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Op + ": " + pathErr.Err.Error()
+	}
+	return err.Error()
 }
 
 // executeRegistry deletes exactly the planned tag references and then
