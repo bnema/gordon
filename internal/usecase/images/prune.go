@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -264,7 +265,7 @@ func (s *Service) inventoryRepository(repository string) ([]pruneguard.RegistryT
 			gaps = append(gaps, domain.InventoryGap{
 				Source: domain.InventorySourceRegistry,
 				Reason: domain.PruneReasonUnknownInventory,
-				Detail: "manifest modification time unreadable for " + ref.String(),
+				Detail: "manifest modification time unreadable for " + ref.String() + ": " + err.Error(),
 			})
 		}
 		candidate.ModTime = modTime
@@ -274,7 +275,7 @@ func (s *Service) inventoryRepository(repository string) ([]pruneguard.RegistryT
 			gaps = append(gaps, domain.InventoryGap{
 				Source: domain.InventorySourceManifests,
 				Reason: domain.PruneReasonUnknownManifest,
-				Detail: "manifest unreadable for " + ref.String(),
+				Detail: manifestReadFailureDetail("manifest", ref.String(), err),
 			})
 			candidates = append(candidates, candidate)
 			continue
@@ -285,7 +286,7 @@ func (s *Service) inventoryRepository(repository string) ([]pruneguard.RegistryT
 			gaps = append(gaps, domain.InventoryGap{
 				Source: domain.InventorySourceManifests,
 				Reason: domain.PruneReasonUnknownManifest,
-				Detail: "manifest corrupt for " + ref.String(),
+				Detail: "manifest parse failed for " + ref.String() + ": " + err.Error(),
 			})
 			candidates = append(candidates, candidate)
 			continue
@@ -523,7 +524,7 @@ func (s *Service) traverseClosure(root retainedRoot, c *closure) {
 		c.gaps = append(c.gaps, domain.InventoryGap{
 			Source: domain.InventorySourceManifests,
 			Reason: domain.PruneReasonUnknownManifest,
-			Detail: "retained manifest unreadable for " + root.Repository + "@" + root.Reference,
+			Detail: manifestReadFailureDetail("retained manifest", root.Repository+"@"+root.Reference, err),
 		})
 		return
 	}
@@ -533,7 +534,7 @@ func (s *Service) traverseClosure(root retainedRoot, c *closure) {
 		c.gaps = append(c.gaps, domain.InventoryGap{
 			Source: domain.InventorySourceManifests,
 			Reason: domain.PruneReasonUnknownManifest,
-			Detail: "retained manifest corrupt for " + root.Repository + "@" + root.Reference,
+			Detail: "retained manifest parse failed for " + root.Repository + "@" + root.Reference + ": " + err.Error(),
 		})
 		return
 	}
@@ -558,6 +559,16 @@ func (s *Service) traverseClosure(root retainedRoot, c *closure) {
 		c.digests[child] = struct{}{}
 		s.traverseClosure(retainedRoot{Repository: root.Repository, Reference: child}, c)
 	}
+}
+
+// manifestReadFailureDetail describes a manifest read failure, telling a
+// missing manifest (for example a stale tag index entry) apart from any
+// other read error. Both stay inventory gaps.
+func manifestReadFailureDetail(what, ref string, err error) string {
+	if errors.Is(err, domain.ErrManifestNotFound) {
+		return what + " not found for " + ref + ": " + err.Error()
+	}
+	return what + " unreadable for " + ref + ": " + err.Error()
 }
 
 // executeRegistry deletes exactly the planned tag references and then

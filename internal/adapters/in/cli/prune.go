@@ -40,6 +40,9 @@ func cliRenderPruneSummary(out io.Writer, summary dto.PruneSummary) error {
 	}
 	for _, gap := range summary.Gaps {
 		line := fmt.Sprintf("inventory incomplete (%s: %s); dependent candidates were left untouched", gap.Source, gap.Reason)
+		if gap.Detail != "" {
+			line += ": " + gap.Detail
+		}
 		if err := cliWriteLine(out, cliRenderWarning(line)); err != nil {
 			return err
 		}

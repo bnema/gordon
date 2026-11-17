@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -316,7 +317,7 @@ func (f *fakeManifestStorage) DeleteManifest(name, reference string) error {
 func (f *fakeManifestStorage) GetManifest(name, reference string) ([]byte, string, error) {
 	manifest, ok := f.manifests[manifestRefKey(name, reference)]
 	if !ok {
-		return nil, "", errors.New("manifest not found")
+		return nil, "", fmt.Errorf("%w: %s/%s", domain.ErrManifestNotFound, name, reference)
 	}
 	return manifest, "application/vnd.oci.image.manifest.v1+json", nil
 }

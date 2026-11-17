@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -321,7 +323,15 @@ func TestPrune_MissingChildManifestMakesUnreferencedBlobsUnknown(t *testing.T) {
 		}
 	}
 	assert.True(t, unknown, "the orphan blob must be reported unknown")
-	assert.NotEmpty(t, report.Plan.Gaps)
+	require.NotEmpty(t, report.Plan.Gaps)
+	var notFoundDetail bool
+	for _, gap := range report.Plan.Gaps {
+		if strings.HasPrefix(gap.Detail, "retained manifest not found for app@") &&
+			strings.Contains(gap.Detail, domain.ErrManifestNotFound.Error()) {
+			notFoundDetail = true
+		}
+	}
+	assert.True(t, notFoundDetail, "the gap must name the repository, digest, and not-found cause: %+v", report.Plan.Gaps)
 
 	// Tags outside the window are still deleted: the failure is scoped
 	// to the content whose safety depended on the missing manifest.
@@ -480,4 +490,28 @@ func mustTagKey(t *testing.T, repository, tag string) string {
 	ref, err := domain.NewRegistryTagRef(repository, tag)
 	require.NoError(t, err)
 	return ref.Key()
+}
+
+func TestManifestReadFailureDetail(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "not found",
+			err:  fmt.Errorf("%w: app/v1", domain.ErrManifestNotFound),
+			want: "manifest not found for app:v1: manifest not found: app/v1",
+		},
+		{
+			name: "other read error",
+			err:  errors.New("permission denied"),
+			want: "manifest unreadable for app:v1: permission denied",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, manifestReadFailureDetail("manifest", "app:v1", tt.err))
+		})
+	}
 }
