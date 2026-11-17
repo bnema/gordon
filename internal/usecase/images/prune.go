@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"sort"
 	"time"
 
@@ -85,7 +87,7 @@ func (s *Service) Prune(ctx context.Context, opts domain.ImagePruneOptions) (dom
 	plan := &domain.PrunePlan{Gaps: append([]domain.InventoryGap(nil), snapshot.Gaps...)}
 
 	if opts.PruneDangling {
-		verdicts, gaps, err := s.planRuntimeImages(ctx, snapshot)
+		verdicts, gaps, err := s.planRuntimeImages(ctx, snapshot, opts.IncludeUnmanagedDangling)
 		if err != nil {
 			return domain.ImagePruneReport{}, err
 		}
@@ -144,7 +146,7 @@ func (s *Service) finishPlan(ctx context.Context, plan *domain.PrunePlan, dryRun
 // planRuntimeImages plans runtime image deletion from one coherent
 // inventory. An unwired or unreadable runtime inventory yields gaps
 // instead of an empty (apparently safe) runtime.
-func (s *Service) planRuntimeImages(ctx context.Context, snapshot *domain.PruneProtectionSnapshot) ([]domain.RuntimeImageVerdict, []domain.InventoryGap, error) {
+func (s *Service) planRuntimeImages(ctx context.Context, snapshot *domain.PruneProtectionSnapshot, includeUnmanagedDangling bool) ([]domain.RuntimeImageVerdict, []domain.InventoryGap, error) {
 	if s.pruneRuntime == nil {
 		return nil, []domain.InventoryGap{{
 			Source: domain.InventorySourceRuntimeImages,
@@ -157,11 +159,12 @@ func (s *Service) planRuntimeImages(ctx context.Context, snapshot *domain.PruneP
 		return nil, nil, fmt.Errorf("images: read runtime inventory: %w", err)
 	}
 	verdicts := pruneguard.PlanRuntimeImages(pruneguard.RuntimePlanInput{
-		Images:                inventory.Images,
-		Containers:            inventory.Containers,
-		Snapshot:              snapshot,
-		ProtectedContainerIDs: snapshot.RefsOfKind(domain.ProtectionRecoveryInhibition),
-		Complete:              inventory.Complete(),
+		Images:                   inventory.Images,
+		Containers:               inventory.Containers,
+		Snapshot:                 snapshot,
+		ProtectedContainerIDs:    snapshot.RefsOfKind(domain.ProtectionRecoveryInhibition),
+		Complete:                 inventory.Complete(),
+		IncludeUnmanagedDangling: includeUnmanagedDangling,
 	})
 	return verdicts, inventory.Gaps, nil
 }
@@ -259,22 +262,24 @@ func (s *Service) inventoryRepository(repository string) ([]pruneguard.RegistryT
 			continue
 		}
 		candidate := pruneguard.RegistryTagCandidate{Ref: ref}
-		modTime, err := s.manifestStorage.GetManifestModTime(repository, tagName)
-		if err != nil {
-			gaps = append(gaps, domain.InventoryGap{
-				Source: domain.InventorySourceRegistry,
-				Reason: domain.PruneReasonUnknownInventory,
-				Detail: "manifest modification time unreadable for " + ref.String(),
-			})
-		}
+		modTime, modTimeErr := s.manifestStorage.GetManifestModTime(repository, tagName)
 		candidate.ModTime = modTime
 
 		data, _, err := s.manifestStorage.GetManifest(repository, tagName)
+		// A manifest that cannot be read is reported once, by its own gap.
+		// A modtime failure on a readable manifest still fails closed.
+		if modTimeErr != nil && err == nil {
+			gaps = append(gaps, domain.InventoryGap{
+				Source: domain.InventorySourceRegistry,
+				Reason: domain.PruneReasonUnknownInventory,
+				Detail: manifestReadFailureDetail("manifest modification time", ref.String(), modTimeErr),
+			})
+		}
 		if err != nil {
 			gaps = append(gaps, domain.InventoryGap{
 				Source: domain.InventorySourceManifests,
 				Reason: domain.PruneReasonUnknownManifest,
-				Detail: "manifest unreadable for " + ref.String(),
+				Detail: manifestReadFailureDetail("manifest", ref.String(), err),
 			})
 			candidates = append(candidates, candidate)
 			continue
@@ -285,7 +290,7 @@ func (s *Service) inventoryRepository(repository string) ([]pruneguard.RegistryT
 			gaps = append(gaps, domain.InventoryGap{
 				Source: domain.InventorySourceManifests,
 				Reason: domain.PruneReasonUnknownManifest,
-				Detail: "manifest corrupt for " + ref.String(),
+				Detail: "manifest parse failed for " + ref.String() + ": " + gapErrorText(err),
 			})
 			candidates = append(candidates, candidate)
 			continue
@@ -523,7 +528,7 @@ func (s *Service) traverseClosure(root retainedRoot, c *closure) {
 		c.gaps = append(c.gaps, domain.InventoryGap{
 			Source: domain.InventorySourceManifests,
 			Reason: domain.PruneReasonUnknownManifest,
-			Detail: "retained manifest unreadable for " + root.Repository + "@" + root.Reference,
+			Detail: manifestReadFailureDetail("retained manifest", root.Repository+"@"+root.Reference, err),
 		})
 		return
 	}
@@ -533,7 +538,7 @@ func (s *Service) traverseClosure(root retainedRoot, c *closure) {
 		c.gaps = append(c.gaps, domain.InventoryGap{
 			Source: domain.InventorySourceManifests,
 			Reason: domain.PruneReasonUnknownManifest,
-			Detail: "retained manifest corrupt for " + root.Repository + "@" + root.Reference,
+			Detail: "retained manifest parse failed for " + root.Repository + "@" + root.Reference + ": " + gapErrorText(err),
 		})
 		return
 	}
@@ -558,6 +563,26 @@ func (s *Service) traverseClosure(root retainedRoot, c *closure) {
 		c.digests[child] = struct{}{}
 		s.traverseClosure(retainedRoot{Repository: root.Repository, Reference: child}, c)
 	}
+}
+
+// manifestReadFailureDetail describes a manifest read failure, telling a
+// missing manifest (for example a stale tag index entry) apart from any
+// other read error. Both stay inventory gaps.
+func manifestReadFailureDetail(what, ref string, err error) string {
+	if errors.Is(err, domain.ErrManifestNotFound) {
+		return what + " not found for " + ref
+	}
+	return what + " unreadable for " + ref + ": " + gapErrorText(err)
+}
+
+// gapErrorText renders an error for a gap detail without host paths: a
+// filesystem error keeps only its operation and cause.
+func gapErrorText(err error) string {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Op + ": " + pathErr.Err.Error()
+	}
+	return err.Error()
 }
 
 // executeRegistry deletes exactly the planned tag references and then

@@ -24,6 +24,11 @@ type ImagePruneRequest struct {
 	PruneDangling *bool `json:"prune_dangling,omitempty"`
 	PruneRegistry *bool `json:"prune_registry,omitempty"`
 	DryRun        *bool `json:"dry_run,omitempty"`
+	// IncludeUnmanagedDangling opts unused, untagged runtime images with no
+	// Gordon ownership record and no Gordon labels into prune. That can
+	// include Gordon images deployed before ownership tracking and
+	// digest-pulled images of other tools.
+	IncludeUnmanagedDangling *bool `json:"include_unmanaged_dangling,omitempty"`
 }
 
 // RuntimePruneResult represents runtime prune results.

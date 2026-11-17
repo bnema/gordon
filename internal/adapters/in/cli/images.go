@@ -29,6 +29,9 @@ type imagesPruneOptions struct {
 	Dangling     bool // scope flag: prune dangling runtime images
 	Registry     bool // scope flag: prune registry tags
 	NoConfirm    bool
+	// IncludeUnmanagedDangling opts unused, untagged runtime images with no
+	// Gordon ownership record and no Gordon labels into prune.
+	IncludeUnmanagedDangling bool
 }
 
 type prunePreview struct {
@@ -130,6 +133,9 @@ reported and left in place. A prune that deletes nothing succeeds.`,
 	cmd.Flags().BoolVar(&opts.Dangling, "dangling", false, "Include dangling runtime images (default: both scopes)")
 	cmd.Flags().BoolVar(&opts.Registry, "registry", false, "Include old registry tags (default: both scopes)")
 	cmd.Flags().BoolVar(&opts.NoConfirm, "no-confirm", false, "Skip confirmation prompt")
+	cmd.Flags().BoolVar(&opts.IncludeUnmanagedDangling, "include-unmanaged-dangling", false,
+		"Also prune unused untagged runtime images with no Gordon ownership record and no Gordon labels\n"+
+			"(includes Gordon images deployed before ownership tracking and images pulled by other tools)")
 
 	return cmd
 }
@@ -343,7 +349,7 @@ func runImagesPrune(ctx context.Context, client imagesClient, opts imagesPruneOp
 			return fmt.Errorf("failed to load prune preview: %w", err)
 		}
 
-		confirmed, err := pruneConfirmFunc(renderPruneConfirmPrompt(preview, opts.KeepReleases, pruneDangling, pruneRegistry))
+		confirmed, err := pruneConfirmFunc(renderPruneConfirmPrompt(preview, opts.KeepReleases, pruneDangling, pruneRegistry, opts.IncludeUnmanagedDangling))
 		if err != nil {
 			return fmt.Errorf("confirmation failed: %w", err)
 		}
@@ -352,7 +358,7 @@ func runImagesPrune(ctx context.Context, client imagesClient, opts imagesPruneOp
 		}
 	}
 
-	req := buildPruneRequest(opts.KeepReleases, pruneDangling, pruneRegistry, false)
+	req := buildPruneRequest(opts, pruneDangling, pruneRegistry, false)
 
 	resp, err := pruneWithSpinner(ctx, client, req, pruneDangling, pruneRegistry)
 	if err != nil {
@@ -390,7 +396,7 @@ func runImagesPruneDryRun(ctx context.Context, client imagesClient, opts imagesP
 
 	// A dry run executes the full inventory and planning path: only the
 	// deletion step is skipped, so the report is the executed plan.
-	req := buildPruneRequest(opts.KeepReleases, pruneDangling, pruneRegistry, true)
+	req := buildPruneRequest(opts, pruneDangling, pruneRegistry, true)
 	resp, err := client.PruneImages(ctx, req)
 	if err != nil {
 		return fmt.Errorf("failed to plan image prune: %w", err)
@@ -440,11 +446,14 @@ func loadPrunePreview(ctx context.Context, client imagesClient, keepReleases int
 	return preview, nil
 }
 
-func renderPruneConfirmPrompt(preview prunePreview, keepReleases int, pruneDangling, pruneRegistry bool) string {
+func renderPruneConfirmPrompt(preview prunePreview, keepReleases int, pruneDangling, pruneRegistry, includeUnmanaged bool) string {
 	lines := []string{"Prune images? This cannot be undone.", ""}
 
 	if pruneDangling {
-		lines = append(lines, fmt.Sprintf("Runtime: would prune %d dangling runtime images", preview.danglingRuntimeCount))
+		lines = append(lines, fmt.Sprintf("Runtime: %d untagged runtime images found (the server decides which are safe to prune)", preview.danglingRuntimeCount))
+		if includeUnmanaged {
+			lines = append(lines, "Runtime: including untagged images with no Gordon ownership record (may include older Gordon images)")
+		}
 	} else {
 		lines = append(lines, "Runtime: cleanup skipped (--registry)")
 	}
@@ -486,7 +495,7 @@ func collectTagsByRepository(images []dto.Image) map[string]map[string]time.Time
 	for _, img := range images {
 		repo := strings.TrimSpace(img.Repository)
 		tag := strings.TrimSpace(img.Tag)
-		if repo == "" || tag == "" || repo == "<none>" || tag == "<none>" {
+		if repo == "" || tag == "" || repo == "<none>" || domain.IsPlaceholderRepoTag(repo+":"+tag) {
 			continue
 		}
 
@@ -559,12 +568,15 @@ func selectKeptTags(tagInfos []previewRegistryTag, keepReleases int) map[string]
 	return kept
 }
 
-func buildPruneRequest(keepReleases int, pruneDangling, pruneRegistry, dryRun bool) dto.ImagePruneRequest {
+func buildPruneRequest(opts imagesPruneOptions, pruneDangling, pruneRegistry, dryRun bool) dto.ImagePruneRequest {
+	keepReleases := opts.KeepReleases
+	includeUnmanaged := opts.IncludeUnmanagedDangling
 	return dto.ImagePruneRequest{
-		KeepLast:      &keepReleases,
-		PruneDangling: &pruneDangling,
-		PruneRegistry: &pruneRegistry,
-		DryRun:        &dryRun,
+		KeepLast:                 &keepReleases,
+		PruneDangling:            &pruneDangling,
+		PruneRegistry:            &pruneRegistry,
+		DryRun:                   &dryRun,
+		IncludeUnmanagedDangling: &includeUnmanaged,
 	}
 }
 

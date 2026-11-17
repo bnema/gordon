@@ -59,6 +59,10 @@ const (
 	// PruneReasonEligibleDanglingRuntimeImage marks a runtime image with
 	// no tag, no container use, and no protection root.
 	PruneReasonEligibleDanglingRuntimeImage PruneReason = "eligible-dangling-runtime-image"
+	// PruneReasonEligibleUnmanagedDanglingImage marks an unused, untagged
+	// runtime image with no Gordon ownership record and no Gordon labels,
+	// made eligible only by the operator's explicit opt-in.
+	PruneReasonEligibleUnmanagedDanglingImage PruneReason = "eligible-unmanaged-dangling-image"
 	// PruneReasonEligibleReleasedVolume marks an app-owned volume whose
 	// durable lifecycle state explicitly records released/abandoned,
 	// which no container uses.
@@ -111,7 +115,9 @@ const (
 	// still point at: tag retention owns it, not runtime prune.
 	PruneReasonProtectedTagged PruneReason = "protected-tagged-runtime-image"
 	// PruneReasonProtectedUnmanaged marks a resource with no Gordon
-	// provenance at all. Gordon never adopts or deletes it.
+	// provenance at all. Gordon never adopts or deletes it, except an
+	// unused untagged runtime image when the operator opts in with
+	// --include-unmanaged-dangling.
 	PruneReasonProtectedUnmanaged PruneReason = "protected-unmanaged"
 )
 
@@ -143,6 +149,7 @@ var pruneReasons = []PruneReason{
 	PruneReasonEligibleRetention,
 	PruneReasonEligibleUnreferencedBlob,
 	PruneReasonEligibleDanglingRuntimeImage,
+	PruneReasonEligibleUnmanagedDanglingImage,
 	PruneReasonEligibleReleasedVolume,
 
 	PruneReasonProtectedLatest,
@@ -172,32 +179,33 @@ var pruneReasons = []PruneReason{
 
 // pruneReasonCategory maps every reason code to the verdict it justifies.
 var pruneReasonCategory = map[PruneReason]PruneVerdict{
-	PruneReasonEligibleRetention:            PruneVerdictEligible,
-	PruneReasonEligibleUnreferencedBlob:     PruneVerdictEligible,
-	PruneReasonEligibleDanglingRuntimeImage: PruneVerdictEligible,
-	PruneReasonEligibleReleasedVolume:       PruneVerdictEligible,
-	PruneReasonProtectedLatest:              PruneVerdictProtected,
-	PruneReasonProtectedRetentionWindow:     PruneVerdictProtected,
-	PruneReasonProtectedDesiredRevision:     PruneVerdictProtected,
-	PruneReasonProtectedActiveService:       PruneVerdictProtected,
-	PruneReasonProtectedRecoveryInhibition:  PruneVerdictProtected,
-	PruneReasonProtectedApplyIntent:         PruneVerdictProtected,
-	PruneReasonProtectedOperation:           PruneVerdictProtected,
-	PruneReasonProtectedOwnership:           PruneVerdictProtected,
-	PruneReasonProtectedContainerUse:        PruneVerdictProtected,
-	PruneReasonProtectedPendingUpload:       PruneVerdictProtected,
-	PruneReasonProtectedSharedContent:       PruneVerdictProtected,
-	PruneReasonProtectedPinned:              PruneVerdictProtected,
-	PruneReasonProtectedServiceManaged:      PruneVerdictProtected,
-	PruneReasonProtectedManagedOnly:         PruneVerdictProtected,
-	PruneReasonProtectedTagged:              PruneVerdictProtected,
-	PruneReasonProtectedUnmanaged:           PruneVerdictProtected,
-	PruneReasonUnknownIdentity:              PruneVerdictUnknown,
-	PruneReasonUnknownProvenance:            PruneVerdictUnknown,
-	PruneReasonUnknownInventory:             PruneVerdictUnknown,
-	PruneReasonUnknownManifest:              PruneVerdictUnknown,
-	PruneReasonUnknownMediaType:             PruneVerdictUnknown,
-	PruneReasonUnknownContainerUse:          PruneVerdictUnknown,
+	PruneReasonEligibleRetention:              PruneVerdictEligible,
+	PruneReasonEligibleUnreferencedBlob:       PruneVerdictEligible,
+	PruneReasonEligibleDanglingRuntimeImage:   PruneVerdictEligible,
+	PruneReasonEligibleUnmanagedDanglingImage: PruneVerdictEligible,
+	PruneReasonEligibleReleasedVolume:         PruneVerdictEligible,
+	PruneReasonProtectedLatest:                PruneVerdictProtected,
+	PruneReasonProtectedRetentionWindow:       PruneVerdictProtected,
+	PruneReasonProtectedDesiredRevision:       PruneVerdictProtected,
+	PruneReasonProtectedActiveService:         PruneVerdictProtected,
+	PruneReasonProtectedRecoveryInhibition:    PruneVerdictProtected,
+	PruneReasonProtectedApplyIntent:           PruneVerdictProtected,
+	PruneReasonProtectedOperation:             PruneVerdictProtected,
+	PruneReasonProtectedOwnership:             PruneVerdictProtected,
+	PruneReasonProtectedContainerUse:          PruneVerdictProtected,
+	PruneReasonProtectedPendingUpload:         PruneVerdictProtected,
+	PruneReasonProtectedSharedContent:         PruneVerdictProtected,
+	PruneReasonProtectedPinned:                PruneVerdictProtected,
+	PruneReasonProtectedServiceManaged:        PruneVerdictProtected,
+	PruneReasonProtectedManagedOnly:           PruneVerdictProtected,
+	PruneReasonProtectedTagged:                PruneVerdictProtected,
+	PruneReasonProtectedUnmanaged:             PruneVerdictProtected,
+	PruneReasonUnknownIdentity:                PruneVerdictUnknown,
+	PruneReasonUnknownProvenance:              PruneVerdictUnknown,
+	PruneReasonUnknownInventory:               PruneVerdictUnknown,
+	PruneReasonUnknownManifest:                PruneVerdictUnknown,
+	PruneReasonUnknownMediaType:               PruneVerdictUnknown,
+	PruneReasonUnknownContainerUse:            PruneVerdictUnknown,
 }
 
 // Valid reports whether r is a defined reason code.
@@ -1334,7 +1342,11 @@ type RuntimeImage struct {
 	RepoTags []string
 	// RepoDigests are the manifest digests the runtime knows for it.
 	RepoDigests []string
-	Labels      map[string]string
+	// ParentID is the image this one was built from. Empty when the
+	// runtime reports no parent (pulled and BuildKit images); a missing
+	// link never proves an image unused.
+	ParentID string
+	Labels   map[string]string
 	// Size is reported in bytes.
 	Size    int64
 	Created time.Time
@@ -1375,4 +1387,35 @@ func (i *RuntimeInventory) Complete() bool {
 		}
 	}
 	return true
+}
+
+// IsPlaceholderRepoTag reports whether a runtime repo tag is a placeholder
+// rather than a usable tag. Docker reports "<none>:<none>"; Podman keeps
+// the repository of a superseded image and reports "<repo>:<none>"; a
+// digest-only "<none>@sha256:..." entry names no tag either. Podman also
+// lists a digest-pulled image as a pure digest reference "repo@sha256:..."
+// in RepoTags (shown as "repo:<none>" by `podman images`), which is not a
+// tag. "repo:tag@sha256:..." keeps its tag.
+func IsPlaceholderRepoTag(tag string) bool {
+	switch {
+	case tag == "", tag == "<none>":
+		return true
+	case strings.HasSuffix(tag, ":<none>"):
+		return true
+	case strings.HasPrefix(tag, "<none>@"):
+		return true
+	default:
+		return IsDigestOnlyImageRef(tag)
+	}
+}
+
+// IsDigestOnlyImageRef reports whether ref is "name@<algo>:<hex>" with a
+// valid digest and no tag on the name.
+func IsDigestOnlyImageRef(ref string) bool {
+	name, digest, ok := strings.Cut(ref, "@")
+	if !ok || name == "" || !ValidOCIDigest(digest) {
+		return false
+	}
+	// A tag is a ':' after the last '/'; a ':' before it is a registry port.
+	return !strings.Contains(name[strings.LastIndex(name, "/")+1:], ":")
 }

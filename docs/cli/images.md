@@ -208,7 +208,7 @@ gordon images list --json
 ## gordon images prune
 
 ```bash
-gordon images prune [--dry-run] [--keep-releases <n>] [--dangling] [--registry] [--no-confirm]
+gordon images prune [--dry-run] [--keep-releases <n>] [--dangling] [--registry] [--include-unmanaged-dangling] [--no-confirm]
 ```
 
 By default, prune removes dangling runtime images **and** applies registry tag retention (keeping `latest` + 3 previous non-`latest` tags per repository). A confirmation prompt is shown before destructive operations.
@@ -223,6 +223,7 @@ Flags:
 | `--keep-releases` | `3` | Number of previous non-`latest` tags to keep per repository (`latest` is always preserved) |
 | `--dangling` | `false` | Restrict scope to dangling runtime images only |
 | `--registry` | `false` | Restrict scope to registry tag retention only |
+| `--include-unmanaged-dangling` | `false` | Also prune unused untagged runtime images with no Gordon ownership record and no Gordon labels |
 | `--no-confirm` | `false` | Skip the confirmation prompt |
 
 ### Scope resolution
@@ -250,6 +251,10 @@ Gordon prunes by ownership, not by name or age. Each candidate gets one verdict:
 | `unknown` | A fact needed to prove it safe was missing, unreadable, or unsupported. It survives. |
 
 Runtime images used by any container, running or stopped, always survive. Registry blobs reachable from a retained or protected manifest survive, including blobs shared with another tag. When a retained manifest cannot be read, the blobs whose safety depended on it become `unknown` rather than eligible.
+
+A runtime image counts as untagged when its tags are placeholders such as `<none>:<none>` or `<repo>:<none>`, or pure digest references. Podman lists a digest-pulled image as `repo@sha256:...` (shown as `repo:<none>` in `podman images`); Gordon treats it as untagged. A deploy that replaces a service's image with a different digest releases the previous one; Gordon keeps the 20 most recent released images per service. Untagged images with no Gordon ownership record and no Gordon labels are `protected-unmanaged` by default. `--include-unmanaged-dangling` makes them `eligible` (`eligible-unmanaged-dangling-image`) when no container uses them, no other image is built on them, and the inventory is complete. This scope can include Gordon images deployed before ownership tracking and digest-pulled images of other tools: review the `--dry-run` list first.
+
+Each inventory gap names the resource and the underlying error. For registry manifests it tells a missing manifest (`not found`, for example a stale tag entry) from a read or parse failure.
 
 Both `--dry-run` and the executed prune return the same report: the verdict counts, the deleted identities, any deletion failures, every inventory gap, and the skipped candidates with their reason codes. A prune that deletes nothing is a success.
 
@@ -298,6 +303,9 @@ gordon images prune --dangling
 
 # Prune registry tags only, keeping latest + 5 previous
 gordon images prune --registry --keep-releases 5
+
+# Also prune unused untagged images Gordon did not create
+gordon images prune --dangling --include-unmanaged-dangling
 
 # Inspect what prune would remove without applying
 # (also lists every skipped candidate with its reason)

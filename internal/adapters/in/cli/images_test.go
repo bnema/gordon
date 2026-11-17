@@ -448,7 +448,7 @@ func TestRunImagesPrune_ConfirmPromptIncludesScopePreviewCounts(t *testing.T) {
 	err := runImagesPrune(context.Background(), client, opts, &out)
 	require.NoError(t, err)
 
-	assert.Contains(t, prompt, "Runtime: would prune 1 dangling runtime images")
+	assert.Contains(t, prompt, "Runtime: 1 untagged runtime images found (the server decides which are safe to prune)")
 	assert.Contains(t, prompt, "Registry: would prune 1 tags")
 	assert.Equal(t, 1, client.listImagesCalls)
 	assert.Equal(t, 0, client.pruneCalls)
@@ -617,4 +617,35 @@ func splitTableColumns(line string) []string {
 	}
 
 	return regexp.MustCompile(`\s{2,}`).Split(strings.TrimSpace(line), -1)
+}
+
+func TestRunImagesPrune_IncludeUnmanagedDanglingIsSent(t *testing.T) {
+	tests := []struct {
+		name string
+		opts imagesPruneOptions
+	}{
+		{"dry run off", imagesPruneOptions{DryRun: true, KeepReleases: 3}},
+		{"dry run on", imagesPruneOptions{DryRun: true, KeepReleases: 3, IncludeUnmanagedDangling: true}},
+		{"no confirm off", imagesPruneOptions{NoConfirm: true, KeepReleases: 3}},
+		{"no confirm on", imagesPruneOptions{NoConfirm: true, KeepReleases: 3, IncludeUnmanagedDangling: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &imagesClientMock{pruneResp: &dto.ImagePruneResponse{}}
+
+			require.NoError(t, runImagesPrune(context.Background(), client, tt.opts, &bytes.Buffer{}))
+
+			require.NotNil(t, client.lastPruneOpts.IncludeUnmanagedDangling)
+			assert.Equal(t, tt.opts.IncludeUnmanagedDangling, *client.lastPruneOpts.IncludeUnmanagedDangling)
+			require.NotNil(t, client.lastPruneOpts.DryRun)
+			assert.Equal(t, tt.opts.DryRun, *client.lastPruneOpts.DryRun)
+		})
+	}
+}
+
+func TestRenderPruneConfirmPrompt_IncludeUnmanagedDangling(t *testing.T) {
+	const line = "Runtime: including untagged images with no Gordon ownership record (may include older Gordon images)"
+	assert.Contains(t, renderPruneConfirmPrompt(prunePreview{}, 3, true, true, true), line)
+	assert.NotContains(t, renderPruneConfirmPrompt(prunePreview{}, 3, true, true, false), line)
+	assert.NotContains(t, renderPruneConfirmPrompt(prunePreview{}, 3, false, true, true), line)
 }

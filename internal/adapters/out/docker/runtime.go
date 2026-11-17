@@ -1124,7 +1124,7 @@ func (r *Runtime) ListImages(ctx context.Context) ([]string, error) {
 	var result []string
 	for _, img := range imageList.Items {
 		for _, tag := range img.RepoTags {
-			if tag != "<none>:<none>" {
+			if !domain.IsPlaceholderRepoTag(tag) {
 				result = append(result, tag)
 			}
 		}

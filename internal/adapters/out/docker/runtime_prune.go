@@ -139,6 +139,7 @@ func runtimeImages(images []image.Summary) []domain.RuntimeImage {
 			ID:          image.ID,
 			RepoTags:    append([]string(nil), image.RepoTags...),
 			RepoDigests: append([]string(nil), image.RepoDigests...),
+			ParentID:    image.ParentID,
 			Labels:      image.Labels,
 			Size:        image.Size,
 			Created:     time.Unix(image.Created, 0),

@@ -115,6 +115,9 @@ func (h *Handler) handleImagesPrune(w http.ResponseWriter, r *http.Request) {
 	if req.DryRun != nil {
 		opts.DryRun = *req.DryRun
 	}
+	if req.IncludeUnmanagedDangling != nil {
+		opts.IncludeUnmanagedDangling = *req.IncludeUnmanagedDangling
+	}
 	if !opts.PruneDangling && !opts.PruneRegistry {
 		h.sendError(w, http.StatusBadRequest, "at least one prune scope must be enabled")
 		return

@@ -1120,9 +1120,23 @@ func (s *Service) recordOwnership(ctx context.Context, app string, p pinnedServi
 	return nil
 }
 
+// maxReleasedImagesPerService bounds the superseded images kept as
+// released claims per service. Released claims accumulate with each deploy
+// that changes the digest until prune reclaims the images, so the limit is
+// the number of such deploys between prunes. A dropped claim falls back to
+// label provenance, which never authorizes deletion.
+const maxReleasedImagesPerService = 20
+
 // recordImageOwnership stamps one service's pinned image into the app's
 // owned-image list. Positive durable ownership is what later authorizes
 // runtime image prune; image labels alone never do.
+//
+// The previously attached image of the service is kept as a released claim
+// when its digest is known and differs from the new one, so prune can match
+// the superseded runtime image by digest once its tag is gone. A released
+// claim for the newly attached digest is dropped: the attached entry owns it.
+// A new entry without a digest still releases a previous digest: container
+// use and protection roots keep protecting it while it is in use.
 func recordImageOwnership(existing []domain.AppOwnedImage, p pinnedService) []domain.AppOwnedImage {
 	entry := domain.AppOwnedImage{
 		Service:   p.spec.Name,
@@ -1130,13 +1144,27 @@ func recordImageOwnership(existing []domain.AppOwnedImage, p pinnedService) []do
 		Digest:    p.digest,
 		State:     domain.AppResourceAttached,
 	}
-	out := append([]domain.AppOwnedImage(nil), existing...)
-	for i, image := range out {
-		if image.Service == entry.Service {
-			out[i] = entry
-			return out
+	out := make([]domain.AppOwnedImage, 0, len(existing)+1)
+	var released []domain.AppOwnedImage
+	for _, image := range existing {
+		if image.Service != entry.Service {
+			out = append(out, image)
+			continue
 		}
+		if image.Digest == "" || image.Digest == entry.Digest {
+			// Same content, or content we cannot name exactly: the new
+			// attached entry replaces it.
+			continue
+		}
+		if image.State == domain.AppResourceAttached {
+			image.State = domain.AppResourceReleased
+		}
+		released = append(released, image)
 	}
+	if len(released) > maxReleasedImagesPerService {
+		released = released[len(released)-maxReleasedImagesPerService:]
+	}
+	out = append(out, released...)
 	return append(out, entry)
 }
 
