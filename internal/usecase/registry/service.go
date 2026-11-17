@@ -233,7 +233,7 @@ type manifestReferences struct {
 const maxManifestTraversal = 10000
 
 // validateManifestBlobs requires every config/layer blob a manifest
-// references to be owned by the repository, and every child manifest to
+// references to be owned by the repository and still stored, and every child manifest to
 // already exist in it. A manifest can therefore never manufacture access to
 // content the repository did not receive through an authenticated push.
 func (s *Service) validateManifestBlobs(name string, data []byte) error {
@@ -256,7 +256,9 @@ func (s *Service) validateManifestBlobs(name string, data []byte) error {
 		if err != nil {
 			return fmt.Errorf("verify blob ownership: %w", err)
 		}
-		if !owned {
+		// The ownership marker outlives a pruned blob, so the blob
+		// itself must still be stored.
+		if !owned || !s.blobStorage.BlobExists(descriptor.Digest) {
 			return fmt.Errorf("%w: %s", domain.ErrManifestBlobUnknown, descriptor.Digest)
 		}
 	}

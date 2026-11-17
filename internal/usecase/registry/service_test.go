@@ -180,12 +180,32 @@ func TestService_PutManifest_SHA512DigestDoesNotPublishEvent(t *testing.T) {
 
 	manifestStorage.EXPECT().PutManifest("myapp", reference, manifest.ContentType, data).Return(nil)
 	blobStorage.EXPECT().BlobOwnedByRepository("myapp", "sha256:config").Return(true, nil)
+	blobStorage.EXPECT().BlobExists("sha256:config").Return(true)
 
 	digest, err := svc.PutManifest(testContext(), manifest)
 
 	require.NoError(t, err)
 	assert.Equal(t, reference, digest)
 	assert.Empty(t, state.PendingDigests(time.Now().UTC()))
+}
+
+// TestService_PutManifest_RejectsOwnedButPrunedBlob proves a manifest
+// cannot reference a blob that prune deleted: the ownership marker
+// survives the blob, so the blob itself must still be stored.
+func TestService_PutManifest_RejectsOwnedButPrunedBlob(t *testing.T) {
+	blobStorage := mocks.NewMockBlobStorage(t)
+	manifestStorage := mocks.NewMockManifestStorage(t)
+	svc := NewService(blobStorage, manifestStorage, mocks.NewMockEventPublisher(t))
+	data := []byte(`{"schemaVersion":2,"config":{"digest":"sha256:config"}}`)
+	manifest := &domain.Manifest{Name: "myapp", Reference: "v1", ContentType: "application/vnd.oci.image.manifest.v1+json", Data: data}
+
+	blobStorage.EXPECT().BlobOwnedByRepository("myapp", "sha256:config").Return(true, nil)
+	blobStorage.EXPECT().BlobExists("sha256:config").Return(false)
+
+	_, err := svc.PutManifest(testContext(), manifest)
+
+	require.ErrorIs(t, err, domain.ErrManifestBlobUnknown)
+	manifestStorage.AssertNotCalled(t, "PutManifest", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestService_PutManifest_RejectsDigestMismatch(t *testing.T) {
