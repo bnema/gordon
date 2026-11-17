@@ -813,7 +813,7 @@ func (h *Handler) handleContainerLogs(w http.ResponseWriter, r *http.Request, lo
 	logLines, err := h.logSvc.GetContainerLogs(ctx, logDomain, lines)
 	if err != nil {
 		log.Warn().Err(err).Str("domain", logDomain).Msg("failed to get container logs")
-		h.sendError(w, http.StatusInternalServerError, "failed to get container logs")
+		h.sendContainerLogsError(w, logDomain, err)
 		return
 	}
 
@@ -821,6 +821,20 @@ func (h *Handler) handleContainerLogs(w http.ResponseWriter, r *http.Request, lo
 		Domain: logDomain,
 		Lines:  domain.RedactSecretLines(logLines),
 	})
+}
+
+// sendContainerLogsError maps container log lookup failures to HTTP statuses.
+func (h *Handler) sendContainerLogsError(w http.ResponseWriter, logDomain string, err error) {
+	switch {
+	case errors.Is(err, domain.ErrServiceReplacementInProgress):
+		h.sendError(w, http.StatusConflict, fmt.Sprintf("service replacement in progress for %s; retry once the deployment finishes", logDomain))
+	case errors.Is(err, domain.ErrServiceReplacementIncomplete):
+		h.sendError(w, http.StatusNotFound, fmt.Sprintf("no running container for %s: last replacement did not complete; redeploy or check `gordon apps show`", logDomain))
+	case errors.Is(err, domain.ErrContainerNotFound):
+		h.sendError(w, http.StatusNotFound, fmt.Sprintf("no running container found for %s", logDomain))
+	default:
+		h.sendError(w, http.StatusInternalServerError, "failed to get container logs")
+	}
 }
 
 // streamProcessLogs streams Gordon process logs via SSE.
@@ -882,19 +896,20 @@ func (h *Handler) streamContainerLogs(w http.ResponseWriter, r *http.Request, lo
 		return
 	}
 
+	// Resolve the stream before committing to SSE so lookup failures keep
+	// their HTTP status.
+	ch, err := h.logSvc.FollowContainerLogs(ctx, logDomain, lines)
+	if err != nil {
+		log.Warn().Err(err).Str("domain", logDomain).Msg("failed to follow container logs")
+		h.sendContainerLogsError(w, logDomain, err)
+		return
+	}
+
 	// Set up SSE
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
-
-	ch, err := h.logSvc.FollowContainerLogs(ctx, logDomain, lines)
-	if err != nil {
-		log.Warn().Err(err).Str("domain", logDomain).Msg("failed to follow container logs")
-		_, _ = fmt.Fprintf(w, "event: error\ndata: failed to stream container logs\n\n")
-		flusher.Flush()
-		return
-	}
 
 	for {
 		select {

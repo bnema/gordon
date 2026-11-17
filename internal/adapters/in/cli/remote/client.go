@@ -947,7 +947,7 @@ func (c *Client) openSSEStream(ctx context.Context, path string) (*http.Response
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodySize))
 		resp.Body.Close()
-		return nil, fmt.Errorf("%s: %s", resp.Status, string(body))
+		return nil, parseErrorResponse(resp, body)
 	}
 
 	return resp, nil

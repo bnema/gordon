@@ -146,3 +146,19 @@ func TestRuntime_GetContainerLogsSinceReportsNotFoundSentinel(t *testing.T) {
 	assert.ErrorIs(t, err, domain.ErrContainerNotFound)
 	assert.False(t, errors.Is(err, context.DeadlineExceeded))
 }
+
+// TestRuntime_GetContainerLogsReportsNotFoundSentinel proves a removed
+// container maps to the domain not-found sentinel for log requests.
+func TestRuntime_GetContainerLogsReportsNotFoundSentinel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"No such container: gone"}`))
+	}))
+	defer server.Close()
+
+	runtime := newRuntimeForHTTPServer(t, server)
+	_, err := runtime.GetContainerLogs(context.Background(), "gone", false)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrContainerNotFound)
+}

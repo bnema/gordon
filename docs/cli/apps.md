@@ -536,6 +536,12 @@ Streams logs for a service in the app's active deployment. The app name and
 `--service` are the only accepted identity: domains and raw container IDs are
 never accepted. `--service` is required when the app has several services.
 
+While a service with volumes or bind mounts is being replaced, its old
+container is already gone and the command fails with `409 Conflict: service
+replacement in progress`; retry once the deployment finishes. If the last
+replacement did not complete, or the container is missing for another reason,
+it fails with `404 Not Found` and `gordon apps show` reports the service state.
+
 ---
 
 ## Workflow Example

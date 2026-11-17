@@ -886,6 +886,9 @@ func (r *Runtime) GetContainerLogs(ctx context.Context, containerID string, foll
 		Tail:       "10000",
 	})
 	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return nil, log.WrapErr(fmt.Errorf("%w: %s", domain.ErrContainerNotFound, containerID), "failed to get container logs")
+		}
 		return nil, log.WrapErr(err, "failed to get container logs")
 	}
 

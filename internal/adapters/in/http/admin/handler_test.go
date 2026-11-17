@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -798,6 +799,45 @@ func TestHandler_LogsRequireLogsReadAndRedact(t *testing.T) {
 		assert.NotContains(t, body, "hunter2")
 		assert.NotContains(t, body, "abc123")
 	})
+}
+
+func TestHandler_ContainerLogsErrorStatuses(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    error
+		status int
+		body   string
+	}{
+		{"replacement in progress", fmt.Errorf("%w: app/web", domain.ErrServiceReplacementInProgress), http.StatusConflict, "service replacement in progress for app/web"},
+		{"replacement incomplete", fmt.Errorf("%w: %w: app/web", domain.ErrContainerNotFound, domain.ErrServiceReplacementIncomplete), http.StatusNotFound, "last replacement did not complete"},
+		{"container not found", fmt.Errorf("%w: old123", domain.ErrContainerNotFound), http.StatusNotFound, "no running container found for app/web"},
+		{"runtime failure", errors.New("daemon down"), http.StatusInternalServerError, "failed to get container logs"},
+	}
+	for _, tc := range cases {
+		for _, follow := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s follow=%v", tc.name, follow), func(t *testing.T) {
+				logSvc := inmocks.NewMockLogService(t)
+				handler := newTestHandler(t, func(d *HandlerDeps) { d.LogSvc = logSvc })
+				path := "/admin/logs/" + url.PathEscape("app/web") + "?lines=10"
+				if follow {
+					logSvc.EXPECT().FollowContainerLogs(mock.Anything, "app/web", 10).Return(nil, tc.err).Once()
+					path += "&follow=true"
+				} else {
+					logSvc.EXPECT().GetContainerLogs(mock.Anything, "app/web", 10).Return(nil, tc.err).Once()
+				}
+
+				server := newScopedTestServer(t, handler, "admin:logs:read")
+				resp, err := http.Get(server.URL + path)
+				require.NoError(t, err)
+				defer resp.Body.Close()
+				body, err := io.ReadAll(resp.Body)
+				require.NoError(t, err)
+
+				assert.Equal(t, tc.status, resp.StatusCode)
+				assert.Contains(t, string(body), tc.body)
+			})
+		}
+	}
 }
 
 func TestHandler_ImagesGet_ReturnsMappedList(t *testing.T) {
