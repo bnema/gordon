@@ -1833,43 +1833,76 @@ func closeVolumeArchivePipe(pw *io.PipeWriter, copyErr, waitErr error, statusCod
 		_ = pw.CloseWithError(copyErr)
 	case waitErr != nil:
 		_ = pw.CloseWithError(waitErr)
-	case isVanishedFileOnlyTarFailure(statusCode, stderr):
-		log.Warn().Str("tar_stderr", strings.TrimSpace(stderr)).Msg("files vanished during volume archive; backup continues without them")
-		_ = pw.Close()
 	case statusCode != 0:
+		if vanished, ok := classifyVanishedTarFailure(statusCode, stderr); ok {
+			log.Warn().
+				Int("vanished_count", len(vanished)).
+				Strs("tar_stderr", firstLines(vanished, maxVanishedLogLines)).
+				Msg("files vanished during volume archive; backup continues without them")
+			_ = pw.Close()
+			return
+		}
 		_ = pw.CloseWithError(fmt.Errorf("volume archive helper exited with code %d: %s", statusCode, strings.TrimSpace(stderr)))
 	default:
 		_ = pw.Close()
 	}
 }
 
-// isVanishedFileOnlyTarFailure reports whether a tar exit is only caused by
-// files removed while archiving (e.g. SQLite journals). It fails closed: exit
-// code 1 is tolerated only when every stderr line is a known vanished-file or
-// summary message from busybox or GNU tar.
-func isVanishedFileOnlyTarFailure(statusCode int64, stderr string) bool {
+const maxVanishedLogLines = 5
+
+// vanishedTarLine matches a tar stderr line reporting an archive member that
+// disappeared while archiving. Paths are relative to /volume, so members
+// always start with "./"; other ENOENT forms (archive, fifo) are rejected.
+type vanishedTarLine struct{ prefix, suffix string }
+
+var vanishedTarLines = []vanishedTarLine{
+	{"tar: ./", ": No such file or directory"},              // busybox stat
+	{"tar: can't open './", "': No such file or directory"}, // busybox open
+	{"tar: ./", ": File removed before we read it"},         // GNU tar
+}
+
+var tarSummaryLines = map[string]bool{
+	"tar: error exit delayed from previous errors":            true, // busybox
+	"tar: Exiting with failure status due to previous errors": true, // GNU tar
+}
+
+// classifyVanishedTarFailure reports whether a helper exit is only caused by
+// archive members removed while archiving (e.g. SQLite journals) and returns
+// those lines. It fails closed: only exit code 1 where every stderr line is a
+// known vanished-member or summary message is tolerated.
+func classifyVanishedTarFailure(statusCode int64, stderr string) ([]string, bool) {
 	if statusCode != 1 {
-		return false
+		return nil, false
 	}
-	vanished := false
+	var vanished []string
 	for _, line := range strings.Split(stderr, "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
 		switch {
-		case line == "tar: error exit delayed from previous errors",
-			line == "tar: Exiting with failure status due to previous errors":
-		case strings.HasPrefix(line, "tar: ") && (strings.HasSuffix(line, ": No such file or directory") ||
-			strings.HasSuffix(line, ": file removed before we read it") ||
-			strings.HasSuffix(line, ": File removed before we read it") ||
-			strings.HasSuffix(line, ": file changed as we read it")):
-			vanished = true
+		case line == "" || tarSummaryLines[line]:
+		case isVanishedTarLine(line):
+			vanished = append(vanished, line)
 		default:
-			return false
+			return nil, false
 		}
 	}
-	return vanished
+	return vanished, len(vanished) > 0
+}
+
+func isVanishedTarLine(line string) bool {
+	for _, form := range vanishedTarLines {
+		if len(line) > len(form.prefix)+len(form.suffix) &&
+			strings.HasPrefix(line, form.prefix) && strings.HasSuffix(line, form.suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func firstLines(lines []string, n int) []string {
+	if len(lines) > n {
+		return lines[:n]
+	}
+	return lines
 }
 
 func volumeArchiveCommand(compression domain.VolumeBackupCompression) (string, error) {
