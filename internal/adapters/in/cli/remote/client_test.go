@@ -509,3 +509,21 @@ func TestExchangeRegistryToken_AccessTokenFallback(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "fallback-token-456", token)
 }
+
+func TestClientStreamContainerLogsReturnsHTTPErrorOnConflict(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error":"service replacement in progress for app/web; retry once the deployment finishes"}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL)
+	ch, err := client.StreamContainerLogs(context.Background(), "app/web", 10)
+
+	require.Nil(t, ch)
+	var httpErr *HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusConflict, httpErr.StatusCode)
+	assert.Equal(t, "service replacement in progress for app/web; retry once the deployment finishes", httpErr.Body)
+}

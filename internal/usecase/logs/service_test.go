@@ -2,6 +2,7 @@ package logs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -230,32 +231,35 @@ func (s stubActiveApps) LoadRecoveryInhibitions(context.Context, string) ([]doma
 	return nil, nil
 }
 
-// stubReplacingApps adds recovery inhibitions to an ACTIVE fixture.
-type stubReplacingApps struct {
-	stubActiveApps
-	inhibitions []domain.AppRecoveryInhibition
-}
-
-func (s stubReplacingApps) LoadRecoveryInhibitions(context.Context, string) ([]domain.AppRecoveryInhibition, error) {
-	return s.inhibitions, nil
+func (s stubActiveApps) LoadOperation(_ context.Context, app, opID string) (domain.AppOperation, error) {
+	return domain.AppOperation{}, fmt.Errorf("operation %s/%s: %w", app, opID, domain.ErrAppOperationNotFound)
 }
 
 func TestService_ContainerLogsDuringReplacement(t *testing.T) {
 	log := zerowrap.New(zerowrap.Config{Level: "warn"})
-	active := stubActiveApps{"app": {App: "app", Services: map[string]domain.AppEffectiveService{
+	active := domain.AppActive{App: "app", Services: map[string]domain.AppEffectiveService{
 		"web": {Container: "old123"},
-	}}}
+	}}
 	removed := fmt.Errorf("%w: old123", domain.ErrContainerNotFound)
 	pending := []domain.AppRecoveryInhibition{{
-		App: "app", Service: "web", ContainerID: "old123", Reason: domain.AppInhibitReplacementPending,
+		App: "app", Service: "web", ContainerID: "old123", Reason: domain.AppInhibitReplacementPending, Operation: "op-1",
 	}}
 
+	// newSvc wires a runtime whose ACTIVE container is gone and an app
+	// state mock returning the given inhibitions.
+	newSvc := func(t *testing.T, follow bool, inhibitions []domain.AppRecoveryInhibition, inhibitErr error) (*Service, *mocks.MockAppState) {
+		runtime := mocks.NewMockContainerRuntime(t)
+		runtime.EXPECT().GetContainerLogs(mock.Anything, "old123", follow).Return(nil, removed)
+		state := mocks.NewMockAppState(t)
+		state.EXPECT().LoadActive(mock.Anything, "app").Return(active, true, nil)
+		state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "app").Return(inhibitions, inhibitErr)
+		return NewService("/tmp/test.log", true, runtime, log).WithAppState(state), state
+	}
+
 	for _, follow := range []bool{false, true} {
-		t.Run(fmt.Sprintf("replacement pending follow=%v", follow), func(t *testing.T) {
-			runtime := mocks.NewMockContainerRuntime(t)
-			runtime.EXPECT().GetContainerLogs(mock.Anything, "old123", follow).Return(nil, removed)
-			svc := NewService("/tmp/test.log", true, runtime, log)
-			svc.WithAppState(stubReplacingApps{stubActiveApps: active, inhibitions: pending})
+		t.Run(fmt.Sprintf("in-flight replacement follow=%v", follow), func(t *testing.T) {
+			svc, state := newSvc(t, follow, pending, nil)
+			state.EXPECT().LoadOperation(mock.Anything, "app", "op-1").Return(domain.AppOperation{}, nil)
 
 			var err error
 			if follow {
@@ -267,29 +271,46 @@ func TestService_ContainerLogsDuringReplacement(t *testing.T) {
 		})
 	}
 
+	t.Run("finished replacement reports incomplete not found", func(t *testing.T) {
+		svc, state := newSvc(t, false, pending, nil)
+		state.EXPECT().LoadOperation(mock.Anything, "app", "op-1").
+			Return(domain.AppOperation{Outcome: domain.AppOutcomeFailed}, nil)
+
+		_, err := svc.GetContainerLogs(context.Background(), "app/web", 10)
+		require.ErrorIs(t, err, domain.ErrContainerNotFound)
+		assert.ErrorIs(t, err, domain.ErrServiceReplacementIncomplete)
+		assert.NotErrorIs(t, err, domain.ErrServiceReplacementInProgress)
+	})
+
+	t.Run("operation load failure is not a not-found", func(t *testing.T) {
+		svc, state := newSvc(t, false, pending, nil)
+		state.EXPECT().LoadOperation(mock.Anything, "app", "op-1").Return(domain.AppOperation{}, errors.New("disk error"))
+
+		_, err := svc.GetContainerLogs(context.Background(), "app/web", 10)
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, domain.ErrContainerNotFound)
+		assert.NotErrorIs(t, err, domain.ErrServiceReplacementInProgress)
+	})
+
+	t.Run("inhibition load failure is not a not-found", func(t *testing.T) {
+		svc, _ := newSvc(t, false, nil, errors.New("disk error"))
+
+		_, err := svc.GetContainerLogs(context.Background(), "app/web", 10)
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, domain.ErrContainerNotFound)
+	})
+
 	t.Run("inhibition for another container stays not found", func(t *testing.T) {
-		runtime := mocks.NewMockContainerRuntime(t)
-		runtime.EXPECT().GetContainerLogs(mock.Anything, "old123", false).Return(nil, removed)
-		svc := NewService("/tmp/test.log", true, runtime, log)
-		svc.WithAppState(stubReplacingApps{stubActiveApps: active, inhibitions: []domain.AppRecoveryInhibition{{
+		svc, _ := newSvc(t, false, []domain.AppRecoveryInhibition{{
 			App: "app", Service: "web", ContainerID: "other", Reason: domain.AppInhibitReplacementPending,
 		}, {
 			App: "app", Service: "web", ContainerID: "old123", Reason: domain.AppInhibitRetirementPending,
-		}}})
+		}}, nil)
 
 		_, err := svc.GetContainerLogs(context.Background(), "app/web", 10)
 		require.ErrorIs(t, err, domain.ErrContainerNotFound)
 		assert.NotErrorIs(t, err, domain.ErrServiceReplacementInProgress)
-	})
-
-	t.Run("missing container without inhibition is not found", func(t *testing.T) {
-		runtime := mocks.NewMockContainerRuntime(t)
-		runtime.EXPECT().GetContainerLogs(mock.Anything, "old123", false).Return(nil, removed)
-		svc := NewService("/tmp/test.log", true, runtime, log)
-		svc.WithAppState(active)
-
-		_, err := svc.GetContainerLogs(context.Background(), "app/web", 10)
-		require.ErrorIs(t, err, domain.ErrContainerNotFound)
+		assert.NotErrorIs(t, err, domain.ErrServiceReplacementIncomplete)
 	})
 }
 

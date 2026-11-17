@@ -828,6 +828,8 @@ func (h *Handler) sendContainerLogsError(w http.ResponseWriter, logDomain string
 	switch {
 	case errors.Is(err, domain.ErrServiceReplacementInProgress):
 		h.sendError(w, http.StatusConflict, fmt.Sprintf("service replacement in progress for %s; retry once the deployment finishes", logDomain))
+	case errors.Is(err, domain.ErrServiceReplacementIncomplete):
+		h.sendError(w, http.StatusNotFound, fmt.Sprintf("no running container for %s: last replacement did not complete; redeploy or check `gordon apps show`", logDomain))
 	case errors.Is(err, domain.ErrContainerNotFound):
 		h.sendError(w, http.StatusNotFound, fmt.Sprintf("no running container found for %s", logDomain))
 	default:

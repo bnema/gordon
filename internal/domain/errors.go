@@ -22,6 +22,9 @@ var (
 	// ErrServiceReplacementInProgress reports that a service's ACTIVE
 	// container was removed by an in-flight stop-before-start replacement.
 	ErrServiceReplacementInProgress = errors.New("service replacement in progress")
+	// ErrServiceReplacementIncomplete reports that a finished replacement
+	// removed a service's ACTIVE container without publishing a successor.
+	ErrServiceReplacementIncomplete = errors.New("last replacement did not complete")
 	// ErrRuntimeUnsupported wraps device-bearing create failures on
 	// engines that cannot serve CDI device requests. It fails closed:
 	// Gordon never retries without devices.

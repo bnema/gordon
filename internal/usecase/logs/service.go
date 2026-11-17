@@ -25,6 +25,7 @@ import (
 type appStateProvider interface {
 	LoadActive(ctx context.Context, app string) (domain.AppActive, bool, error)
 	LoadRecoveryInhibitions(ctx context.Context, app string) ([]domain.AppRecoveryInhibition, error)
+	LoadOperation(ctx context.Context, app, opID string) (domain.AppOperation, error)
 }
 
 // Service implements the LogService interface.
@@ -99,30 +100,50 @@ func (s *Service) openContainerLogs(ctx context.Context, ref string, follow bool
 		return nil, fmt.Errorf("failed to get container logs: %w", err)
 	}
 	app, service, _ := strings.Cut(ref, "/")
-	pending, inhibitErr := s.replacementPending(ctx, app, service, containerID)
-	if inhibitErr != nil {
-		return nil, fmt.Errorf("failed to get container logs: %w", errors.Join(err, inhibitErr))
-	}
-	if pending {
-		return nil, fmt.Errorf("%w: %s", domain.ErrServiceReplacementInProgress, ref)
-	}
-	return nil, fmt.Errorf("failed to get container logs for %s: %w", ref, err)
+	return nil, s.missingContainerError(ctx, app, service, ref, containerID, err)
 }
 
-// replacementPending reports whether a replacement-pending inhibition names
-// the given container of an app service.
-func (s *Service) replacementPending(ctx context.Context, app, service, containerID string) (bool, error) {
+// missingContainerError classifies a removed ACTIVE container. A
+// replacement-pending inhibition is written only for single-writer
+// (volume/bind) replacements; other replacements report not found during
+// their short stop-to-publish window. The inhibition outlives a failed
+// replacement (it clears on publish), so only an operation without an
+// outcome means the replacement is still in flight. State-loading failures
+// must not wrap ErrContainerNotFound: they are server errors, not 404s.
+func (s *Service) missingContainerError(ctx context.Context, app, service, ref, containerID string, notFound error) error {
+	inhibition, found, err := s.replacementPending(ctx, app, service, containerID)
+	if err != nil {
+		return fmt.Errorf("failed to resolve missing container for %s: %w", ref, err)
+	}
+	if !found {
+		return fmt.Errorf("failed to get container logs for %s: %w", ref, notFound)
+	}
+	if inhibition.Operation != "" {
+		op, err := s.appState.LoadOperation(ctx, app, inhibition.Operation)
+		if err != nil && !errors.Is(err, domain.ErrAppOperationNotFound) {
+			return fmt.Errorf("failed to load replacement operation for %s: %w", ref, err)
+		}
+		if err == nil && !op.Terminal() {
+			return fmt.Errorf("%w: %s", domain.ErrServiceReplacementInProgress, ref)
+		}
+	}
+	return fmt.Errorf("%w: %w: %s", domain.ErrContainerNotFound, domain.ErrServiceReplacementIncomplete, ref)
+}
+
+// replacementPending returns the replacement-pending inhibition naming the
+// given container of an app service, if any.
+func (s *Service) replacementPending(ctx context.Context, app, service, containerID string) (domain.AppRecoveryInhibition, bool, error) {
 	inhibitions, err := s.appState.LoadRecoveryInhibitions(ctx, app)
 	if err != nil {
-		return false, fmt.Errorf("failed to load recovery inhibitions for %s: %w", app, err)
+		return domain.AppRecoveryInhibition{}, false, fmt.Errorf("failed to load recovery inhibitions for %s: %w", app, err)
 	}
 	for _, inhibition := range inhibitions {
 		if inhibition.Service == service && inhibition.ContainerID == containerID &&
 			inhibition.Reason == domain.AppInhibitReplacementPending {
-			return true, nil
+			return inhibition, true, nil
 		}
 	}
-	return false, nil
+	return domain.AppRecoveryInhibition{}, false, nil
 }
 
 // GetProcessLogs returns the last N lines of Gordon process logs.

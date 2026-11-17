@@ -809,6 +809,7 @@ func TestHandler_ContainerLogsErrorStatuses(t *testing.T) {
 		body   string
 	}{
 		{"replacement in progress", fmt.Errorf("%w: app/web", domain.ErrServiceReplacementInProgress), http.StatusConflict, "service replacement in progress for app/web"},
+		{"replacement incomplete", fmt.Errorf("%w: %w: app/web", domain.ErrContainerNotFound, domain.ErrServiceReplacementIncomplete), http.StatusNotFound, "last replacement did not complete"},
 		{"container not found", fmt.Errorf("%w: old123", domain.ErrContainerNotFound), http.StatusNotFound, "no running container found for app/web"},
 		{"runtime failure", errors.New("daemon down"), http.StatusInternalServerError, "failed to get container logs"},
 	}
