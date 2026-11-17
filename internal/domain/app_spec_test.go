@@ -313,3 +313,16 @@ func TestAppService_BackupOnlyChange(t *testing.T) {
 	changed.Services[0].Command = []string{"serve"}
 	assert.False(t, domain.SameAppServiceRuntime(changed.Services[0], base.Services[0]))
 }
+
+func TestDiffAppSpec_DNSForcesReplacement(t *testing.T) {
+	before := validSpec()
+	after := validSpec()
+	after.Services[0].DNS = []string{"9.9.9.9"}
+	assert.Contains(t, domain.DiffAppSpec(after, before).Changed, "service/web/dns")
+	assert.False(t, domain.SameAppServiceRuntime(after.Services[0], before.Services[0]))
+
+	opts := validSpec()
+	opts.Services[0].DNSOptions = []string{"ndots:1"}
+	assert.Contains(t, domain.DiffAppSpec(opts, before).Changed, "service/web/dns")
+	assert.False(t, domain.SameAppServiceRuntime(opts.Services[0], before.Services[0]))
+}

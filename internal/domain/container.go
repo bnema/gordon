@@ -2,7 +2,10 @@
 // These types are used throughout the application and have no tags or framework dependencies.
 package domain
 
-import "time"
+import (
+	"net/netip"
+	"time"
+)
 
 // Container represents a running container in the system.
 type Container struct {
@@ -132,17 +135,19 @@ type ContainerConfig struct {
 	// like CDIDevices: never persisted. The runtime adds them on top of the
 	// base capability set (default or CapAdd) and never alters CapDrop.
 	AddedCapabilities []string
-	NetworkMode       string   // Network to join
-	Hostname          string   // Container hostname for DNS
-	Aliases           []string // Additional network aliases
-	MemoryLimit       int64    // Memory limit in bytes (0 = no limit)
-	MemorySwap        int64    // Total memory plus swap in bytes (0 = runtime default)
-	NanoCPUs          int64    // CPU quota in nanoseconds (1e9 = 1 core, 0 = no limit)
-	PidsLimit         int64    // Max number of PIDs (0 = no limit)
-	ReadOnlyRootFS    bool     // Mount container root filesystem read-only
-	User              string   // User to run as
-	CapDrop           []string // Linux capabilities to drop; nil uses runtime compat defaults
-	CapAdd            []string // Linux capabilities to add; nil uses runtime compat defaults
+	NetworkMode       string       // Network to join
+	Hostname          string       // Container hostname for DNS
+	Aliases           []string     // Additional network aliases
+	DNS               []netip.Addr // Upstream resolver servers (nil = runtime default)
+	DNSOptions        []string     // resolv.conf options (nil = runtime default)
+	MemoryLimit       int64        // Memory limit in bytes (0 = no limit)
+	MemorySwap        int64        // Total memory plus swap in bytes (0 = runtime default)
+	NanoCPUs          int64        // CPU quota in nanoseconds (1e9 = 1 core, 0 = no limit)
+	PidsLimit         int64        // Max number of PIDs (0 = no limit)
+	ReadOnlyRootFS    bool         // Mount container root filesystem read-only
+	User              string       // User to run as
+	CapDrop           []string     // Linux capabilities to drop; nil uses runtime compat defaults
+	CapAdd            []string     // Linux capabilities to add; nil uses runtime compat defaults
 }
 
 // ContainerStatus represents the current state of a container.

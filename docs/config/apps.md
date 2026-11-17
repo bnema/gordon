@@ -31,6 +31,8 @@ APP_ENV = "production"
 image = "gordon.mydomain.com/blog:1.4.2"
 command = ["node", "server.js"]  # optional override
 stop_grace = "30s"               # optional, default 30s
+dns = ["9.9.9.9"]                # optional upstream resolver IPs
+dns_options = ["ndots:1"]        # optional resolv.conf options
 devices = ["transcode-gpu"]      # 0..n logical names from [app_devices.<name>]
 capabilities = ["vm-net"]    # 0..n logical names from [app_capabilities.<name>]
 
@@ -111,6 +113,12 @@ RCON is ordinary TCP: use TCP interfaces, no special RCON kind.
 `publish` must match the entrypoint listener it attaches to exactly: the same host, port, and transport. The traffic manager binds the entrypoint address, so a declaration that differs (for example a loopback bind on a wildcard entrypoint, or a different port) is rejected at apply time instead of being silently widened. `0.0.0.0` and an omitted host are the same wildcard.
 
 Image registry names and digest syntax are validated during manifest apply, resolution, deployment preflight, and immediately before every pull, including boot, restart, and recovery. Docker Hub (`docker.io` and canonical pull host `registry-1.docker.io`), `ghcr.io`, `quay.io`, and Gordon's configured registry are allowed by default. Add other exact registry hostname+port entries with `images.allowed_registries`; this does not configure credentials, and external resolution and pulls use anonymous access. When `images.require_digest` is enabled, every image reference, including Gordon registry images, must use `@sha256:<64 hex chars>`. See [Images](./images.md). This is a hostname allowlist, not DNS/IP validation or runtime egress enforcement.
+
+## DNS
+
+`dns` lists upstream resolver IP addresses (IPv4 or IPv6) and `dns_options` lists `resolv.conf` options for one service. `dns` accepts at most 3 servers, the limit of Docker's embedded resolver and glibc. Both are optional; without them the runtime default applies. Changing either replaces the container.
+
+On an app network, Docker and Podman keep their network resolver in `/etc/resolv.conf` (Docker's embedded DNS, Podman's aardvark-dns). `dns` sets the upstream servers that resolver forwards to; it does not replace it, so service names keep resolving. It does not bypass aardvark-dns, so it does not work around aardvark-dns issues such as failures on large upstream answers. `dns_options` lands in `/etc/resolv.conf`.
 
 ## Resource Limits
 

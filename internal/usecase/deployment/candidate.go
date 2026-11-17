@@ -93,6 +93,10 @@ func (s *Service) prepareCandidate(ctx context.Context, app, revision string, p 
 		}
 		volumes[vol.Path] = runtimeName
 	}
+	dns, err := p.spec.DNSAddrs()
+	if err != nil {
+		return preparedCandidate{}, err
+	}
 	config := &domain.ContainerConfig{
 		Image:             image,
 		Name:              domain.LogicalServiceIdentity(app, p.spec.Name) + "--" + shortOp(opID),
@@ -110,6 +114,8 @@ func (s *Service) prepareCandidate(ctx context.Context, app, revision string, p 
 		NetworkMode:       nets.private,
 		Hostname:          p.spec.Name,
 		Aliases:           []string{p.spec.Name},
+		DNS:               dns,
+		DNSOptions:        append([]string(nil), p.spec.DNSOptions...),
 		MemoryLimit:       resources.Memory,
 		MemorySwap:        resources.MemorySwap,
 		NanoCPUs:          resources.NanoCPUs,

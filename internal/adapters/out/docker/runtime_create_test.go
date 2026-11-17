@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -306,4 +307,25 @@ func TestRuntime_CreateContainerResources(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRuntime_CreateContainerAppliesDNS(t *testing.T) {
+	createBody := createTestContainer(t, &domain.ContainerConfig{
+		Image:      "nginx:latest",
+		Name:       "gordon-app",
+		DNS:        []netip.Addr{netip.MustParseAddr("9.9.9.9"), netip.MustParseAddr("2620:fe::fe")},
+		DNSOptions: []string{"ndots:1"},
+	})
+	hostConfig, ok := createBody["HostConfig"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, []any{"9.9.9.9", "2620:fe::fe"}, hostConfig["Dns"])
+	assert.Equal(t, []any{"ndots:1"}, hostConfig["DnsOptions"])
+}
+
+func TestRuntime_CreateContainerWithoutDNSKeepsRuntimeDefault(t *testing.T) {
+	createBody := createTestContainer(t, &domain.ContainerConfig{Image: "nginx:latest", Name: "gordon-app"})
+	hostConfig, ok := createBody["HostConfig"].(map[string]any)
+	require.True(t, ok)
+	assert.Empty(t, hostConfig["Dns"])
+	assert.Empty(t, hostConfig["DnsOptions"])
 }
