@@ -48,6 +48,11 @@ func cliRenderPruneSummary(out io.Writer, summary dto.PruneSummary) error {
 			return err
 		}
 	}
+	for _, warning := range summary.Warnings {
+		if err := cliWriteLine(out, cliRenderWarning("warning: "+warning)); err != nil {
+			return err
+		}
+	}
 	return cliRenderSkippedCandidates(out, summary.Candidates)
 }
 

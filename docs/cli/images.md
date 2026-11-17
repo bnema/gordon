@@ -252,11 +252,15 @@ Gordon prunes by ownership, not by name or age. Each candidate gets one verdict:
 
 Runtime images used by any container, running or stopped, always survive. Registry blobs reachable from a retained or protected manifest survive, including blobs shared with another tag. When a retained manifest cannot be read, the blobs whose safety depended on it become `unknown` rather than eligible.
 
+A digest-named tag (a legacy `tags.json` entry such as `sha256:...`) whose manifest belongs to a retained closure is `protected`, so retention never removes a manifest that a retained index or digest pin needs.
+
+An image index can list a child manifest that is not stored (legacy data pushed before Gordon validated index children). When the index itself is readable and the child lookup reports exactly "not found", the child counts as absent: it references nothing, and the plan reports a non-blocking warning naming the repository, the index, and the missing child with its platform. A missing `subject`, a child read or parse error, and a stale tag entry remain inventory gaps.
+
 A runtime image counts as untagged when its tags are placeholders such as `<none>:<none>` or `<repo>:<none>`, or pure digest references. Podman lists a digest-pulled image as `repo@sha256:...` (shown as `repo:<none>` in `podman images`); Gordon treats it as untagged. A deploy that replaces a service's image with a different digest releases the previous one; Gordon keeps the 20 most recent released images per service. Untagged images with no Gordon ownership record and no Gordon labels are `protected-unmanaged` by default. `--include-unmanaged-dangling` makes them `eligible` (`eligible-unmanaged-dangling-image`) when no container uses them, no other image is built on them, and the inventory is complete. This scope can include Gordon images deployed before ownership tracking and digest-pulled images of other tools: review the `--dry-run` list first.
 
 Each inventory gap names the resource and the underlying error. For registry manifests it tells a missing manifest (`not found`, for example a stale tag entry) from a read or parse failure.
 
-Both `--dry-run` and the executed prune return the same report: the verdict counts, the deleted identities, any deletion failures, every inventory gap, and the skipped candidates with their reason codes. A prune that deletes nothing is a success.
+Both `--dry-run` and the executed prune return the same report: the verdict counts, the deleted identities, any deletion failures, every inventory gap, every warning, and the skipped candidates with their reason codes. A prune that deletes nothing is a success.
 
 ## gordon images tags
 

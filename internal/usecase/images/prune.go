@@ -105,10 +105,11 @@ func (s *Service) Prune(ctx context.Context, opts domain.ImagePruneOptions) (dom
 	}
 
 	s.mutationMu.Lock()
-	tags, blobs, gaps := s.planRegistry(snapshot, opts.KeepLast)
-	plan.Tags = tags
-	plan.Blobs = blobs
-	plan.Gaps = append(plan.Gaps, gaps...)
+	registry := s.planRegistry(snapshot, opts.KeepLast)
+	plan.Tags = registry.tags
+	plan.Blobs = registry.blobs
+	plan.Gaps = append(plan.Gaps, registry.gaps...)
+	plan.Warnings = append(plan.Warnings, registry.warnings...)
 
 	if err := plan.Validate(); err != nil {
 		s.mutationMu.Unlock()
@@ -195,20 +196,20 @@ func (s *Service) executeRuntimeImages(ctx context.Context, plan *domain.PrunePl
 // The returned gaps record every fact that could not be read. A tag
 // whose manifest is unreadable stays unknown, and a blob whose
 // reference set cannot be fully proven stays unknown too.
-func (s *Service) planRegistry(snapshot *domain.PruneProtectionSnapshot, keepLast int) ([]domain.RegistryTagVerdict, []domain.OCIBlobVerdict, []domain.InventoryGap) {
+func (s *Service) planRegistry(snapshot *domain.PruneProtectionSnapshot, keepLast int) registryPlan {
 	if keepLast <= 0 {
 		// Documented behavior: keep_last=0 skips registry tag and blob
 		// cleanup entirely.
-		return nil, nil, nil
+		return registryPlan{}
 	}
 
 	repositories, err := s.manifestStorage.ListRepositories()
 	if err != nil {
-		return nil, nil, []domain.InventoryGap{{
+		return registryPlan{gaps: []domain.InventoryGap{{
 			Source: domain.InventorySourceRegistry,
 			Reason: domain.PruneReasonUnknownInventory,
 			Detail: "list repositories failed",
-		}}
+		}}}
 	}
 	sort.Strings(repositories)
 
@@ -232,7 +233,15 @@ func (s *Service) planRegistry(snapshot *domain.PruneProtectionSnapshot, keepLas
 	protectClosureTags(verdicts, closure)
 	blobs, blobGaps := s.planRegistryBlobs(snapshot, closure)
 	gaps = append(gaps, blobGaps...)
-	return verdicts, blobs, gaps
+	return registryPlan{tags: verdicts, blobs: blobs, gaps: gaps, warnings: closure.warnings}
+}
+
+// registryPlan is the registry part of one prune plan.
+type registryPlan struct {
+	tags     []domain.RegistryTagVerdict
+	blobs    []domain.OCIBlobVerdict
+	gaps     []domain.InventoryGap
+	warnings []string
 }
 
 // protectClosureTags protects every digest-named tag whose manifest is
@@ -516,6 +525,16 @@ func rootReasonsForDigest(snapshot *domain.PruneProtectionSnapshot, digest strin
 type retainedRoot struct {
 	Repository string
 	Reference  string
+	// Parent is set when this root is a manifests[] entry of an index
+	// that was read and parsed successfully.
+	Parent *indexEntry
+}
+
+// indexEntry describes where a child manifest is listed.
+type indexEntry struct {
+	IndexRef    string
+	IndexDigest string
+	Platform    string
 }
 
 // closure is the transitive reference set of every retained manifest.
@@ -524,6 +543,7 @@ type closure struct {
 	visited  map[string]struct{}
 	complete bool
 	gaps     []domain.InventoryGap
+	warnings []string
 }
 
 func newClosure() *closure {
@@ -544,12 +564,24 @@ func (c *closure) references(digest string) bool {
 // then treats unreferenced blobs as unknown instead of eligible.
 func (s *Service) traverseClosure(root retainedRoot, c *closure) {
 	visitKey := root.Repository + "\x00" + root.Reference
+	if root.Parent != nil {
+		// An index entry may be proven absent, which a subject or tag
+		// visit of the same digest may not: keep the visits apart.
+		visitKey += "\x00index"
+	}
 	if _, seen := c.visited[visitKey]; seen {
 		return
 	}
 	c.visited[visitKey] = struct{}{}
 
 	data, _, err := s.manifestStorage.GetManifest(root.Repository, root.Reference)
+	if err != nil && root.Parent != nil && errors.Is(err, domain.ErrManifestNotFound) {
+		// A child listed by a readable index is known absent: it
+		// contributes no references. Legacy data predating push-time
+		// index validation can hold such an index.
+		c.warnings = append(c.warnings, absentIndexChildWarning(root))
+		return
+	}
 	if err != nil {
 		c.complete = false
 		c.gaps = append(c.gaps, domain.InventoryGap{
@@ -586,10 +618,30 @@ func (s *Service) traverseClosure(root retainedRoot, c *closure) {
 	for _, digest := range references.blobs {
 		c.digests[digest] = struct{}{}
 	}
+	isIndex := mediaType == mediaTypeOCIImageIndex || mediaType == mediaTypeDockerManifestList
+	indexDigest := digestOfManifest(data)
 	for _, child := range references.childManifests {
-		c.digests[child] = struct{}{}
-		s.traverseClosure(retainedRoot{Repository: root.Repository, Reference: child}, c)
+		c.digests[child.digest] = struct{}{}
+		next := retainedRoot{Repository: root.Repository, Reference: child.digest}
+		if isIndex && child.indexEntry {
+			next.Parent = &indexEntry{IndexRef: root.Reference, IndexDigest: indexDigest, Platform: child.platform}
+		}
+		s.traverseClosure(next, c)
 	}
+}
+
+// absentIndexChildWarning names the repository, the index, and the
+// missing child of one broken index.
+func absentIndexChildWarning(root retainedRoot) string {
+	index := root.Parent.IndexRef
+	if index != root.Parent.IndexDigest {
+		index += " (" + root.Parent.IndexDigest + ")"
+	}
+	child := root.Reference
+	if root.Parent.Platform != "" {
+		child += " (" + root.Parent.Platform + ")"
+	}
+	return fmt.Sprintf("index %s@%s lists missing child manifest %s; treated as absent", root.Repository, index, child)
 }
 
 // manifestReadFailureDetail describes a manifest read failure, telling a
@@ -662,7 +714,42 @@ func (s *Service) executeRegistry(ctx context.Context, plan *domain.PrunePlan, r
 // manifestReferences is the parsed reference set of one manifest.
 type manifestReferences struct {
 	blobs          []string
-	childManifests []string
+	childManifests []childManifest
+}
+
+// childManifest is one manifest referenced by another manifest.
+type childManifest struct {
+	digest string
+	// indexEntry is true for a manifests[] entry, false for a subject.
+	indexEntry bool
+	// platform describes the entry, e.g. linux/amd64 or attestation.
+	platform string
+}
+
+// manifestDescriptor is one manifests[] entry of an index.
+type manifestDescriptor struct {
+	Digest   string `json:"digest"`
+	Platform *struct {
+		OS           string `json:"os"`
+		Architecture string `json:"architecture"`
+		Variant      string `json:"variant"`
+	} `json:"platform"`
+	Annotations map[string]string `json:"annotations"`
+}
+
+// describe renders the platform of an index entry for operator output.
+func (d manifestDescriptor) describe() string {
+	if kind := d.Annotations["vnd.docker.reference.type"]; kind != "" {
+		return kind
+	}
+	if d.Platform == nil || d.Platform.OS == "" {
+		return ""
+	}
+	platform := d.Platform.OS + "/" + d.Platform.Architecture
+	if d.Platform.Variant != "" {
+		platform += "/" + d.Platform.Variant
+	}
+	return platform
 }
 
 // parseManifestDocument parses one manifest and reports its media type.
@@ -676,10 +763,8 @@ func parseManifestDocument(data []byte) (manifestReferences, string, error) {
 		Layers []struct {
 			Digest string `json:"digest"`
 		} `json:"layers"`
-		Manifests []struct {
-			Digest string `json:"digest"`
-		} `json:"manifests"`
-		Subject *struct {
+		Manifests []manifestDescriptor `json:"manifests"`
+		Subject   *struct {
 			Digest string `json:"digest"`
 		} `json:"subject"`
 	}
@@ -689,7 +774,7 @@ func parseManifestDocument(data []byte) (manifestReferences, string, error) {
 
 	refs := manifestReferences{
 		blobs:          make([]string, 0, len(document.Layers)+1),
-		childManifests: make([]string, 0, len(document.Manifests)+1),
+		childManifests: make([]childManifest, 0, len(document.Manifests)+1),
 	}
 	if document.Config.Digest != "" {
 		refs.blobs = append(refs.blobs, document.Config.Digest)
@@ -701,11 +786,13 @@ func parseManifestDocument(data []byte) (manifestReferences, string, error) {
 	}
 	for _, child := range document.Manifests {
 		if child.Digest != "" {
-			refs.childManifests = append(refs.childManifests, child.Digest)
+			refs.childManifests = append(refs.childManifests, childManifest{
+				digest: child.Digest, indexEntry: true, platform: child.describe(),
+			})
 		}
 	}
 	if document.Subject != nil && document.Subject.Digest != "" {
-		refs.childManifests = append(refs.childManifests, document.Subject.Digest)
+		refs.childManifests = append(refs.childManifests, childManifest{digest: document.Subject.Digest})
 	}
 
 	mediaType := document.MediaType

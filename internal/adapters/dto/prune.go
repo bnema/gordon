@@ -44,6 +44,8 @@ type PruneSummary struct {
 	Failures []PruneFailure `json:"failures,omitempty"`
 	// Gaps lists every inventory that could not be read in full.
 	Gaps []PruneGap `json:"gaps,omitempty"`
+	// Warnings lists non-blocking findings that did not stop the plan.
+	Warnings []string `json:"warnings,omitempty"`
 	// ReclaimedBytes is set only when the adapter can attribute exact
 	// bytes to the deletions it performed.
 	ReclaimedBytes int64 `json:"reclaimed_bytes"`
@@ -88,6 +90,7 @@ func PruneSummaryFromDomain(report domain.PruneReport) PruneSummary {
 			Source: string(gap.Source), Reason: string(gap.Reason), Detail: gap.Detail,
 		})
 	}
+	summary.Warnings = append(summary.Warnings, report.Warnings...)
 	return summary
 }
 

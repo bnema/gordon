@@ -25,3 +25,12 @@ func TestCliRenderPruneSummary_ShowsGapDetail(t *testing.T) {
 	assert.Contains(t, out.String(),
 		"inventory incomplete (manifests: unknown-manifest-unreadable: manifest not found for app:v1); dependent candidates were left untouched\n")
 }
+
+func TestCliRenderPruneSummary_ShowsWarnings(t *testing.T) {
+	var out bytes.Buffer
+	summary := dto.PruneSummary{Warnings: []string{"index app@latest lists missing child manifest sha256:abc (linux/amd64); treated as absent"}}
+
+	require.NoError(t, cliRenderPruneSummary(&out, summary))
+
+	assert.Contains(t, out.String(), "warning: index app@latest lists missing child manifest sha256:abc (linux/amd64); treated as absent\n")
+}

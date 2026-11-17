@@ -208,6 +208,7 @@ type fakeManifestStorage struct {
 	deletedManifests      []manifestRef
 	deleteErr             error
 	modTimeErrs           map[string]error
+	getErrs               map[string]error
 }
 
 type fakeBlobStorage struct {
@@ -320,6 +321,9 @@ func (f *fakeManifestStorage) DeleteManifest(name, reference string) error {
 }
 
 func (f *fakeManifestStorage) GetManifest(name, reference string) ([]byte, string, error) {
+	if err := f.getErrs[manifestRefKey(name, reference)]; err != nil {
+		return nil, "", err
+	}
 	manifest, ok := f.manifests[manifestRefKey(name, reference)]
 	if !ok {
 		return nil, "", fmt.Errorf("%w: %s/%s", domain.ErrManifestNotFound, name, reference)

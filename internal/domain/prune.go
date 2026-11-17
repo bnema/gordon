@@ -1073,6 +1073,9 @@ type PrunePlan struct {
 	Images  []RuntimeImageVerdict
 	Volumes []VolumeVerdict
 	Gaps    []InventoryGap
+	// Warnings lists non-blocking findings: content the plan proved
+	// absent, reported so an operator can repair it.
+	Warnings []string
 }
 
 // EligibleTags returns the registry tags safe to delete, in plan order.
@@ -1269,6 +1272,8 @@ type PruneReport struct {
 	Candidates []PruneCandidateReport
 	// Gaps lists every inventory that could not be read in full.
 	Gaps []InventoryGap
+	// Warnings lists non-blocking findings that did not stop the plan.
+	Warnings []string
 	// Deleted lists exactly the identities that were removed.
 	Deleted []PruneCandidateReport
 	// Failures lists exact deletions that failed without aborting the run.
@@ -1311,6 +1316,7 @@ func NewPruneReport(plan *PrunePlan, applied bool) *PruneReport {
 	}
 	report.Candidates = plan.Candidates()
 	report.Gaps = plan.Gaps
+	report.Warnings = plan.Warnings
 	return report
 }
 

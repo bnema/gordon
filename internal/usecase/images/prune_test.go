@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -283,61 +282,6 @@ func TestPrune_ZeroEligibleSucceeds(t *testing.T) {
 	assert.Zero(t, report.Registry.BlobsRemoved)
 	assert.Zero(t, report.Runtime.DeletedCount)
 	assert.Equal(t, 0, report.Plan.CountByVerdict(domain.PruneVerdictEligible))
-}
-
-func TestPrune_MissingChildManifestMakesUnreferencedBlobsUnknown(t *testing.T) {
-	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
-	childDigest := testDigest("missing-child")
-	indexBody := mustManifestIndexJSON(t, childDigest)
-
-	manifests := newFakeManifestStorage()
-	manifests.repositories = []string{"app"}
-	manifests.tagsByRepo["app"] = []string{"latest", "v1", "v2"}
-	manifests.modTimes[manifestRefKey("app", "latest")] = now
-	manifests.modTimes[manifestRefKey("app", "v1")] = now.Add(-time.Hour)
-	manifests.modTimes[manifestRefKey("app", "v2")] = now.Add(-2 * time.Hour)
-	// latest is a multi-arch index whose child manifest is absent.
-	manifests.manifests[manifestRefKey("app", "latest")] = indexBody
-	manifests.manifests[manifestRefKey("app", "v1")] = mustManifestJSON(t, testDigest("c1"))
-	manifests.manifests[manifestRefKey("app", "v2")] = mustManifestJSON(t, testDigest("c2"))
-
-	orphan := testDigest("orphan")
-	blobs := &fakeBlobStorage{
-		blobs:        []string{orphan},
-		blobModTimes: map[string]time.Time{orphan: now.Add(-72 * time.Hour)},
-	}
-
-	svc, _ := newPruneService(t, manifests, blobs, &fakeProtectionStore{}, &fakePruneRuntime{})
-	report, err := svc.Prune(context.Background(), domain.ImagePruneOptions{
-		KeepLast: 1, PruneRegistry: true,
-	})
-	require.NoError(t, err)
-
-	// The unreadable child makes the retained closure incomplete, so an
-	// otherwise-unreferenced blob is unknown, not eligible.
-	assert.Empty(t, blobs.deletedBlobs, "an incomplete closure must never authorize blob deletion")
-	assert.Contains(t, manifestBodyDigest(indexBody), "sha256:")
-	var unknown bool
-	for _, candidate := range report.Plan.Candidates {
-		if candidate.Kind == domain.PruneResourceOCIBlob && candidate.Verdict == domain.PruneVerdictUnknown {
-			unknown = true
-			assert.Equal(t, []domain.PruneReason{domain.PruneReasonUnknownManifest}, candidate.Reasons)
-		}
-	}
-	assert.True(t, unknown, "the orphan blob must be reported unknown")
-	require.NotEmpty(t, report.Plan.Gaps)
-	var notFoundDetail bool
-	for _, gap := range report.Plan.Gaps {
-		if strings.HasPrefix(gap.Detail, "retained manifest not found for app@") {
-			notFoundDetail = true
-		}
-	}
-	assert.True(t, notFoundDetail, "the gap must name the repository, digest, and not-found cause: %+v", report.Plan.Gaps)
-
-	// Tags outside the window are still deleted: the failure is scoped
-	// to the content whose safety depended on the missing manifest.
-	assert.Len(t, manifests.deletedManifests, 1)
-	assert.Equal(t, "v2", manifests.deletedManifests[0].reference)
 }
 
 func TestPrune_SharedBlobStaysProtectedThroughClosure(t *testing.T) {
