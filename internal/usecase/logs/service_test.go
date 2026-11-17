@@ -2,6 +2,7 @@ package logs
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -159,7 +160,8 @@ func TestService_GetContainerLogs(t *testing.T) {
 
 		_, err := svc.GetContainerLogs(context.Background(), "unknown/web", 10)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "active app/service not found")
+		assert.ErrorIs(t, err, domain.ErrContainerNotFound)
+		assert.Contains(t, err.Error(), "active app/service unknown/web")
 	})
 
 	for _, tc := range []struct {
@@ -208,7 +210,8 @@ func TestService_FollowContainerLogs(t *testing.T) {
 
 		_, err := svc.FollowContainerLogs(context.Background(), "unknown/web", 10)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "active app/service not found")
+		assert.ErrorIs(t, err, domain.ErrContainerNotFound)
+		assert.Contains(t, err.Error(), "active app/service unknown/web")
 	})
 
 	t.Run("rejects raw container ID without calling the runtime", func(t *testing.T) {
@@ -222,6 +225,73 @@ func TestService_FollowContainerLogs(t *testing.T) {
 }
 
 type stubActiveApps map[string]domain.AppActive
+
+func (s stubActiveApps) LoadRecoveryInhibitions(context.Context, string) ([]domain.AppRecoveryInhibition, error) {
+	return nil, nil
+}
+
+// stubReplacingApps adds recovery inhibitions to an ACTIVE fixture.
+type stubReplacingApps struct {
+	stubActiveApps
+	inhibitions []domain.AppRecoveryInhibition
+}
+
+func (s stubReplacingApps) LoadRecoveryInhibitions(context.Context, string) ([]domain.AppRecoveryInhibition, error) {
+	return s.inhibitions, nil
+}
+
+func TestService_ContainerLogsDuringReplacement(t *testing.T) {
+	log := zerowrap.New(zerowrap.Config{Level: "warn"})
+	active := stubActiveApps{"app": {App: "app", Services: map[string]domain.AppEffectiveService{
+		"web": {Container: "old123"},
+	}}}
+	removed := fmt.Errorf("%w: old123", domain.ErrContainerNotFound)
+	pending := []domain.AppRecoveryInhibition{{
+		App: "app", Service: "web", ContainerID: "old123", Reason: domain.AppInhibitReplacementPending,
+	}}
+
+	for _, follow := range []bool{false, true} {
+		t.Run(fmt.Sprintf("replacement pending follow=%v", follow), func(t *testing.T) {
+			runtime := mocks.NewMockContainerRuntime(t)
+			runtime.EXPECT().GetContainerLogs(mock.Anything, "old123", follow).Return(nil, removed)
+			svc := NewService("/tmp/test.log", true, runtime, log)
+			svc.WithAppState(stubReplacingApps{stubActiveApps: active, inhibitions: pending})
+
+			var err error
+			if follow {
+				_, err = svc.FollowContainerLogs(context.Background(), "app/web", 10)
+			} else {
+				_, err = svc.GetContainerLogs(context.Background(), "app/web", 10)
+			}
+			require.ErrorIs(t, err, domain.ErrServiceReplacementInProgress)
+		})
+	}
+
+	t.Run("inhibition for another container stays not found", func(t *testing.T) {
+		runtime := mocks.NewMockContainerRuntime(t)
+		runtime.EXPECT().GetContainerLogs(mock.Anything, "old123", false).Return(nil, removed)
+		svc := NewService("/tmp/test.log", true, runtime, log)
+		svc.WithAppState(stubReplacingApps{stubActiveApps: active, inhibitions: []domain.AppRecoveryInhibition{{
+			App: "app", Service: "web", ContainerID: "other", Reason: domain.AppInhibitReplacementPending,
+		}, {
+			App: "app", Service: "web", ContainerID: "old123", Reason: domain.AppInhibitRetirementPending,
+		}}})
+
+		_, err := svc.GetContainerLogs(context.Background(), "app/web", 10)
+		require.ErrorIs(t, err, domain.ErrContainerNotFound)
+		assert.NotErrorIs(t, err, domain.ErrServiceReplacementInProgress)
+	})
+
+	t.Run("missing container without inhibition is not found", func(t *testing.T) {
+		runtime := mocks.NewMockContainerRuntime(t)
+		runtime.EXPECT().GetContainerLogs(mock.Anything, "old123", false).Return(nil, removed)
+		svc := NewService("/tmp/test.log", true, runtime, log)
+		svc.WithAppState(active)
+
+		_, err := svc.GetContainerLogs(context.Background(), "app/web", 10)
+		require.ErrorIs(t, err, domain.ErrContainerNotFound)
+	})
+}
 
 func (s stubActiveApps) LoadActive(_ context.Context, app string) (domain.AppActive, bool, error) {
 	active, ok := s[app]
