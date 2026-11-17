@@ -200,7 +200,11 @@ func startImagePruneScheduler(ctx context.Context, cfg Config, svc *services, lo
 				Int("runtime_deleted", report.Runtime.DeletedCount).
 				Int("registry_tags_removed", report.Registry.TagsRemoved).
 				Int("registry_blobs_removed", report.Registry.BlobsRemoved).
+				Int("warnings", len(report.Plan.Warnings)).
 				Msg("scheduled image prune complete")
+			for _, warning := range report.Plan.Warnings {
+				log.Warn().Str("warning", warning).Msg("scheduled image prune warning")
+			}
 			return nil
 		},
 	)

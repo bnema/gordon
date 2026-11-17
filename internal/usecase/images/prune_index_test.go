@@ -61,19 +61,19 @@ func TestPrune_DigestTagOfRetainedIndexChildIsNeverDeleted(t *testing.T) {
 // an OCI index with amd64, arm64, and two attestation children, and the
 // amd64 child manifest file is missing.
 type legacyIndexFixture struct {
-	manifests  *fakeManifestStorage
-	blobs      *fakeBlobStorage
-	missing    string
-	indexBody  []byte
-	kept       []string // blobs reachable through existing children
-	orphan     string   // old blob reachable through nothing
-	youngBlob  string   // recent blob reachable through nothing
-	childByArc map[string]string
+	manifests   *fakeManifestStorage
+	blobs       *fakeBlobStorage
+	missing     string
+	indexBody   []byte
+	kept        []string // blobs reachable through existing children
+	orphan      string   // old blob reachable through nothing
+	youngBlob   string   // recent blob reachable through nothing
+	childByArch map[string]string
 }
 
 func newLegacyIndexFixture(t *testing.T, now time.Time) legacyIndexFixture {
 	t.Helper()
-	f := legacyIndexFixture{manifests: newFakeManifestStorage(), childByArc: map[string]string{}}
+	f := legacyIndexFixture{manifests: newFakeManifestStorage(), childByArch: map[string]string{}}
 	f.manifests.repositories = []string{"app"}
 	f.manifests.tagsByRepo["app"] = []string{"latest"}
 	f.manifests.modTimes[manifestRefKey("app", "latest")] = now.Add(-30 * 24 * time.Hour)
@@ -103,7 +103,7 @@ func newLegacyIndexFixture(t *testing.T, now time.Time) legacyIndexFixture {
 		layer := testDigest(entry.name + "-layer")
 		body := mustManifestJSON(t, config, layer)
 		digest := manifestBodyDigest(body)
-		f.childByArc[entry.name] = digest
+		f.childByArch[entry.name] = digest
 		if entry.name == "amd64" {
 			f.missing = digest
 		} else {
@@ -183,7 +183,7 @@ func TestPrune_IndexChildReadErrorStaysGap(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	f := newLegacyIndexFixture(t, now)
 	f.manifests.getErrs = map[string]error{
-		manifestRefKey("app", f.childByArc["arm64"]): errors.New("permission denied"),
+		manifestRefKey("app", f.childByArch["arm64"]): errors.New("permission denied"),
 	}
 
 	svc, _ := newPruneService(t, f.manifests, f.blobs, &fakeProtectionStore{}, &fakePruneRuntime{})
@@ -199,7 +199,7 @@ func TestPrune_MissingSubjectOfIndexChildStaysGap(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	f := newLegacyIndexFixture(t, now)
 	// The arm64 attestation names the missing amd64 manifest as subject.
-	attestation := f.childByArc["att-arm64"]
+	attestation := f.childByArch["att-arm64"]
 	f.manifests.manifests[manifestRefKey("app", attestation)] = mustSubjectManifestJSON(t, f.missing)
 
 	svc, _ := newPruneService(t, f.manifests, f.blobs, &fakeProtectionStore{}, &fakePruneRuntime{})
@@ -241,4 +241,154 @@ func TestPrune_DigestTagBehindUnreadableClosureNodeStaysUnknown(t *testing.T) {
 
 	assert.Empty(t, manifests.deletedManifests, "an incomplete closure must not authorize digest tag deletion")
 	assert.Equal(t, 4, len(report.Plan.CandidatesOfKind(domain.PruneResourceRegistryTag, domain.PruneVerdictUnknown)))
+}
+
+// TestPrune_AbsentChildDoesNotProtectOtherRepositoryTag reproduces the
+// cross-repository probe: an absent child of repo a must not make
+// b:sha256:X protected while its blobs become eligible.
+func TestPrune_AbsentChildDoesNotProtectOtherRepositoryTag(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	cfg, layer := testDigest("b-config"), testDigest("b-layer")
+	childBody := mustManifestJSON(t, cfg, layer)
+	child := manifestBodyDigest(childBody)
+
+	manifests := newFakeManifestStorage()
+	manifests.repositories = []string{"a", "b"}
+	manifests.tagsByRepo["a"] = []string{"latest"}
+	manifests.manifests[manifestRefKey("a", "latest")] = mustManifestIndexJSON(t, child)
+	manifests.modTimes[manifestRefKey("a", "latest")] = now
+	manifests.tagsByRepo["b"] = []string{"v1", child}
+	manifests.manifests[manifestRefKey("b", "v1")] = mustManifestJSON(t, testDigest("v1-config"))
+	manifests.modTimes[manifestRefKey("b", "v1")] = now
+	manifests.manifests[manifestRefKey("b", child)] = childBody
+	manifests.modTimes[manifestRefKey("b", child)] = now.Add(-30 * 24 * time.Hour)
+
+	blobs := &fakeBlobStorage{
+		blobs:        []string{cfg, layer},
+		blobModTimes: map[string]time.Time{cfg: now.Add(-72 * time.Hour), layer: now.Add(-72 * time.Hour)},
+	}
+	svc, _ := newPruneService(t, manifests, blobs, &fakeProtectionStore{}, &fakePruneRuntime{})
+	report, err := svc.Prune(context.Background(), domain.ImagePruneOptions{KeepLast: 1, PruneRegistry: true, DryRun: true})
+	require.NoError(t, err)
+
+	verdicts := map[string]domain.PruneVerdict{}
+	for _, candidate := range report.Plan.Candidates {
+		verdicts[candidate.Ref] = candidate.Verdict
+	}
+	// The tag and its content share one fate: both go, never tag kept
+	// and content deleted.
+	assert.Equal(t, domain.PruneVerdictEligible, verdicts["b:"+child])
+	assert.Equal(t, domain.PruneVerdictEligible, verdicts[cfg])
+	assert.Equal(t, domain.PruneVerdictEligible, verdicts[layer])
+	require.Len(t, report.Plan.Warnings, 1)
+}
+
+// TestPrune_ProtectedDigestTagIsTraversedToFixpoint proves a tag
+// protected by closure membership keeps its own content: a legacy digest
+// file whose body differs from the tag that named the digest is walked.
+func TestPrune_ProtectedDigestTagIsTraversedToFixpoint(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	latestBody := mustManifestJSON(t, testDigest("latest-config"))
+	mirror := manifestBodyDigest(latestBody)
+	extra := testDigest("mirror-only-layer")
+
+	manifests := newFakeManifestStorage()
+	manifests.repositories = []string{"app"}
+	manifests.tagsByRepo["app"] = []string{"latest", "v1", mirror}
+	manifests.manifests[manifestRefKey("app", "latest")] = latestBody
+	manifests.modTimes[manifestRefKey("app", "latest")] = now
+	manifests.manifests[manifestRefKey("app", "v1")] = mustManifestJSON(t, testDigest("v1-config"))
+	manifests.modTimes[manifestRefKey("app", "v1")] = now
+	manifests.manifests[manifestRefKey("app", mirror)] = mustManifestJSON(t, testDigest("latest-config"), extra)
+	manifests.modTimes[manifestRefKey("app", mirror)] = now.Add(-30 * 24 * time.Hour)
+
+	blobs := &fakeBlobStorage{blobs: []string{extra}, blobModTimes: map[string]time.Time{extra: now.Add(-72 * time.Hour)}}
+	svc, _ := newPruneService(t, manifests, blobs, &fakeProtectionStore{}, &fakePruneRuntime{})
+	_, err := svc.Prune(context.Background(), domain.ImagePruneOptions{KeepLast: 1, PruneRegistry: true})
+	require.NoError(t, err)
+
+	assert.Empty(t, manifests.deletedManifests)
+	assert.Empty(t, blobs.deletedBlobs, "content of a protected digest tag must survive")
+}
+
+func TestPrune_DockerManifestListAbsentChild(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	cfg := testDigest("arm-config")
+	present := mustManifestJSON(t, cfg)
+	presentDigest := manifestBodyDigest(present)
+	missing := testDigest("amd-manifest")
+	list := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.docker.distribution.manifest.list.v2+json","manifests":[` +
+		`{"digest":"` + missing + `","platform":{"os":"linux","architecture":"amd64"}},` +
+		`{"digest":"` + presentDigest + `","platform":{"os":"linux","architecture":"arm","variant":"v7"}}]}`)
+
+	manifests := newFakeManifestStorage()
+	manifests.repositories = []string{"app"}
+	manifests.tagsByRepo["app"] = []string{"latest"}
+	manifests.manifests[manifestRefKey("app", "latest")] = list
+	manifests.modTimes[manifestRefKey("app", "latest")] = now
+	manifests.manifests[manifestRefKey("app", presentDigest)] = present
+
+	orphan := testDigest("orphan")
+	blobs := &fakeBlobStorage{blobs: []string{cfg, orphan}, blobModTimes: map[string]time.Time{cfg: now.Add(-72 * time.Hour), orphan: now.Add(-72 * time.Hour)}}
+	svc, _ := newPruneService(t, manifests, blobs, &fakeProtectionStore{}, &fakePruneRuntime{})
+	report, err := svc.Prune(context.Background(), domain.ImagePruneOptions{KeepLast: 1, PruneRegistry: true, DryRun: true})
+	require.NoError(t, err)
+
+	assert.Empty(t, report.Plan.Gaps)
+	require.Len(t, report.Plan.Warnings, 1)
+	assert.Contains(t, report.Plan.Warnings[0], missing+" (linux/amd64)")
+	verdicts := blobVerdicts(report)
+	assert.Equal(t, domain.PruneVerdictProtected, verdicts[cfg])
+	assert.Equal(t, domain.PruneVerdictEligible, verdicts[orphan])
+}
+
+func TestPrune_NestedIndexAbsentGrandchild(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	cfg := testDigest("present-config")
+	present := mustManifestJSON(t, cfg)
+	presentDigest := manifestBodyDigest(present)
+	missing := testDigest("missing-grandchild")
+	nested := mustManifestIndexJSON(t, presentDigest, missing)
+	nestedDigest := manifestBodyDigest(nested)
+
+	manifests := newFakeManifestStorage()
+	manifests.repositories = []string{"app"}
+	manifests.tagsByRepo["app"] = []string{"latest"}
+	manifests.manifests[manifestRefKey("app", "latest")] = mustManifestIndexJSON(t, nestedDigest)
+	manifests.modTimes[manifestRefKey("app", "latest")] = now
+	manifests.manifests[manifestRefKey("app", nestedDigest)] = nested
+	manifests.manifests[manifestRefKey("app", presentDigest)] = present
+
+	blobs := &fakeBlobStorage{blobs: []string{cfg}, blobModTimes: map[string]time.Time{cfg: now.Add(-72 * time.Hour)}}
+	svc, _ := newPruneService(t, manifests, blobs, &fakeProtectionStore{}, &fakePruneRuntime{})
+	report, err := svc.Prune(context.Background(), domain.ImagePruneOptions{KeepLast: 1, PruneRegistry: true, DryRun: true})
+	require.NoError(t, err)
+
+	assert.Empty(t, report.Plan.Gaps)
+	require.Len(t, report.Plan.Warnings, 1)
+	assert.Contains(t, report.Plan.Warnings[0], "index app@"+nestedDigest+" lists missing child manifest "+missing)
+	assert.Equal(t, domain.PruneVerdictProtected, blobVerdicts(report)[cfg])
+}
+
+func TestPrune_EveryIndexListingAnAbsentChildIsReported(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	missing := testDigest("shared-missing")
+	first := mustManifestIndexJSON(t, missing)
+	second := []byte(`{"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"digest":"` + missing + `"}]}`)
+
+	manifests := newFakeManifestStorage()
+	manifests.repositories = []string{"app"}
+	manifests.tagsByRepo["app"] = []string{"latest", "v1"}
+	manifests.manifests[manifestRefKey("app", "latest")] = first
+	manifests.modTimes[manifestRefKey("app", "latest")] = now
+	manifests.manifests[manifestRefKey("app", "v1")] = second
+	manifests.modTimes[manifestRefKey("app", "v1")] = now
+
+	svc, _ := newPruneService(t, manifests, &fakeBlobStorage{}, &fakeProtectionStore{}, &fakePruneRuntime{})
+	report, err := svc.Prune(context.Background(), domain.ImagePruneOptions{KeepLast: 1, PruneRegistry: true, DryRun: true})
+	require.NoError(t, err)
+
+	require.Len(t, report.Plan.Warnings, 2)
+	assert.Contains(t, report.Plan.Warnings[0], manifestBodyDigest(first))
+	assert.Contains(t, report.Plan.Warnings[1], manifestBodyDigest(second))
 }

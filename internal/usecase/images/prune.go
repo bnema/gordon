@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"sort"
+	"strings"
 	"time"
 
 	"bnema.dev/zerowrap"
@@ -230,7 +231,7 @@ func (s *Service) planRegistry(snapshot *domain.PruneProtectionSnapshot, keepLas
 	})
 
 	closure := s.buildRetainedClosure(snapshot, verdicts, tags, complete, repositories)
-	protectClosureTags(verdicts, closure)
+	s.protectClosureTags(verdicts, closure)
 	blobs, blobGaps := s.planRegistryBlobs(snapshot, closure)
 	gaps = append(gaps, blobGaps...)
 	return registryPlan{tags: verdicts, blobs: blobs, gaps: gaps, warnings: closure.warnings}
@@ -244,24 +245,35 @@ type registryPlan struct {
 	warnings []string
 }
 
-// protectClosureTags protects every digest-named tag whose manifest is
-// part of a retained closure. Legacy tags.json files can list child or
-// mirror digests as tags; deleting such a "tag" removes the manifest
-// file a retained index or digest pin still needs. When the closure is
-// incomplete, an unread node could list any digest tag as a child, so
-// the remaining eligible digest tags become unknown. Named tags keep
-// their verdict: deleting one removes only its own file.
-func protectClosureTags(verdicts []domain.RegistryTagVerdict, c *closure) {
-	for i := range verdicts {
-		verdict := &verdicts[i]
-		if verdict.Verdict != domain.PruneVerdictEligible || !domain.ValidOCIDigest(verdict.Ref.Tag) {
-			continue
-		}
-		switch {
-		case c.references(verdict.Ref.Tag):
+// protectClosureTags protects every eligible tag whose literal name is
+// a manifest of the retained closure in the same repository. Legacy
+// tags.json files can list child or mirror digests as tags; deleting
+// such a "tag" removes the manifest file a retained index or digest pin
+// still needs. Each newly protected tag becomes a retained root, so the
+// walk repeats until no tag changes. When the closure is incomplete, an
+// unread node could list any digest tag as a child, so the remaining
+// eligible digest tags become unknown. Named tags keep their verdict:
+// deleting one removes only its own file.
+func (s *Service) protectClosureTags(verdicts []domain.RegistryTagVerdict, c *closure) {
+	for changed := true; changed; {
+		changed = false
+		for i := range verdicts {
+			verdict := &verdicts[i]
+			if verdict.Verdict != domain.PruneVerdictEligible || !c.holds(verdict.Ref.Repository, verdict.Ref.Tag) {
+				continue
+			}
 			verdict.Verdict = domain.PruneVerdictProtected
 			verdict.Reasons = domain.CanonicalReasons(domain.PruneReasonProtectedSharedContent)
-		case !c.complete:
+			s.traverseClosure(retainedRoot{Repository: verdict.Ref.Repository, Reference: verdict.Ref.Tag}, c)
+			changed = true
+		}
+	}
+	if c.complete {
+		return
+	}
+	for i := range verdicts {
+		verdict := &verdicts[i]
+		if verdict.Verdict == domain.PruneVerdictEligible && domain.ValidOCIDigest(verdict.Ref.Tag) {
 			verdict.Verdict = domain.PruneVerdictUnknown
 			verdict.Reasons = domain.CanonicalReasons(domain.PruneReasonUnknownManifest)
 		}
@@ -545,19 +557,34 @@ type indexEntry struct {
 
 // closure is the transitive reference set of every retained manifest.
 type closure struct {
-	digests  map[string]struct{}
-	visited  map[string]struct{}
-	complete bool
-	gaps     []domain.InventoryGap
-	warnings []string
+	digests map[string]struct{}
+	visited map[string]struct{}
+	// manifests holds every manifest read successfully, keyed by
+	// repository and lowercased reference or digest. An absent index
+	// child is never a member.
+	manifests map[string]struct{}
+	complete  bool
+	gaps      []domain.InventoryGap
+	warnings  []string
 }
 
 func newClosure() *closure {
 	return &closure{
-		digests:  make(map[string]struct{}),
-		visited:  make(map[string]struct{}),
-		complete: true,
+		digests:   make(map[string]struct{}),
+		visited:   make(map[string]struct{}),
+		manifests: make(map[string]struct{}),
+		complete:  true,
 	}
+}
+
+func closureKey(repository, reference string) string {
+	return repository + "\x00" + strings.ToLower(reference)
+}
+
+// holds reports whether the closure read this manifest in repository.
+func (c *closure) holds(repository, reference string) bool {
+	_, ok := c.manifests[closureKey(repository, reference)]
+	return ok
 }
 
 func (c *closure) references(digest string) bool {
@@ -572,8 +599,9 @@ func (s *Service) traverseClosure(root retainedRoot, c *closure) {
 	visitKey := root.Repository + "\x00" + root.Reference
 	if root.Parent != nil {
 		// An index entry may be proven absent, which a subject or tag
-		// visit of the same digest may not: keep the visits apart.
-		visitKey += "\x00index"
+		// visit of the same digest may not: keep the visits apart, and
+		// per parent index so every broken index is reported.
+		visitKey += "\x00index\x00" + root.Parent.IndexDigest
 	}
 	if _, seen := c.visited[visitKey]; seen {
 		return
@@ -583,57 +611,65 @@ func (s *Service) traverseClosure(root retainedRoot, c *closure) {
 	data, _, err := s.manifestStorage.GetManifest(root.Repository, root.Reference)
 	if err != nil && root.Parent != nil && errors.Is(err, domain.ErrManifestNotFound) {
 		// A child listed by a readable index is known absent: it
-		// contributes no references. Legacy data predating push-time
-		// index validation can hold such an index.
+		// contributes no references.
 		c.warnings = append(c.warnings, absentIndexChildWarning(root))
 		return
 	}
-	if err != nil {
+	references, mediaType, gap := readRetainedManifest(root, data, err)
+	if gap != nil {
 		c.complete = false
-		c.gaps = append(c.gaps, domain.InventoryGap{
-			Source: domain.InventorySourceManifests,
-			Reason: domain.PruneReasonUnknownManifest,
-			Detail: manifestReadFailureDetail("retained manifest", root.Repository+"@"+root.Reference, err),
-		})
-		return
-	}
-	references, mediaType, err := parseManifestDocument(data)
-	if err != nil {
-		c.complete = false
-		c.gaps = append(c.gaps, domain.InventoryGap{
-			Source: domain.InventorySourceManifests,
-			Reason: domain.PruneReasonUnknownManifest,
-			Detail: "retained manifest parse failed for " + root.Repository + "@" + root.Reference + ": " + gapErrorText(err),
-		})
-		return
-	}
-	if !supportedManifestMediaType(mediaType) {
-		c.complete = false
-		c.gaps = append(c.gaps, domain.InventoryGap{
-			Source: domain.InventorySourceManifests,
-			Reason: domain.PruneReasonUnknownMediaType,
-			Detail: "retained manifest media type unsupported for " + root.Repository + "@" + root.Reference,
-		})
+		c.gaps = append(c.gaps, *gap)
 		return
 	}
 
 	// The manifest body itself is addressable content: record its digest
 	// so a stored manifest copy is never judged unreferenced.
-	c.digests[digestOfManifest(data)] = struct{}{}
+	manifestDigest := digestOfManifest(data)
+	c.digests[manifestDigest] = struct{}{}
+	c.manifests[closureKey(root.Repository, root.Reference)] = struct{}{}
+	c.manifests[closureKey(root.Repository, manifestDigest)] = struct{}{}
 
 	for _, digest := range references.blobs {
 		c.digests[digest] = struct{}{}
 	}
 	isIndex := mediaType == mediaTypeOCIImageIndex || mediaType == mediaTypeDockerManifestList
-	indexDigest := digestOfManifest(data)
 	for _, child := range references.childManifests {
 		c.digests[child.digest] = struct{}{}
 		next := retainedRoot{Repository: root.Repository, Reference: child.digest}
 		if isIndex && child.indexEntry {
-			next.Parent = &indexEntry{IndexRef: root.Reference, IndexDigest: indexDigest, Platform: child.platform}
+			next.Parent = &indexEntry{IndexRef: root.Reference, IndexDigest: manifestDigest, Platform: child.platform}
 		}
 		s.traverseClosure(next, c)
 	}
+}
+
+// readRetainedManifest parses one retained manifest read. It returns a
+// gap when the read failed or the document cannot be trusted.
+func readRetainedManifest(root retainedRoot, data []byte, readErr error) (manifestReferences, string, *domain.InventoryGap) {
+	ref := root.Repository + "@" + root.Reference
+	if readErr != nil {
+		return manifestReferences{}, "", &domain.InventoryGap{
+			Source: domain.InventorySourceManifests,
+			Reason: domain.PruneReasonUnknownManifest,
+			Detail: manifestReadFailureDetail("retained manifest", ref, readErr),
+		}
+	}
+	references, mediaType, err := parseManifestDocument(data)
+	if err != nil {
+		return manifestReferences{}, "", &domain.InventoryGap{
+			Source: domain.InventorySourceManifests,
+			Reason: domain.PruneReasonUnknownManifest,
+			Detail: "retained manifest parse failed for " + ref + ": " + gapErrorText(err),
+		}
+	}
+	if !supportedManifestMediaType(mediaType) {
+		return manifestReferences{}, "", &domain.InventoryGap{
+			Source: domain.InventorySourceManifests,
+			Reason: domain.PruneReasonUnknownMediaType,
+			Detail: "retained manifest media type unsupported for " + ref,
+		}
+	}
+	return references, mediaType, nil
 }
 
 // absentIndexChildWarning names the repository, the index, and the
