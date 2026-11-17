@@ -31,7 +31,7 @@ APP_ENV = "production"
 image = "gordon.mydomain.com/blog:1.4.2"
 command = ["node", "server.js"]  # optional override
 stop_grace = "30s"               # optional, default 30s
-dns = ["9.9.9.9"]                # optional resolver IPs, default runtime resolver
+dns = ["9.9.9.9"]                # optional upstream resolver IPs
 dns_options = ["ndots:1"]        # optional resolv.conf options
 devices = ["transcode-gpu"]      # 0..n logical names from [app_devices.<name>]
 capabilities = ["vm-net"]    # 0..n logical names from [app_capabilities.<name>]
@@ -116,9 +116,9 @@ Image registry names and digest syntax are validated during manifest apply, reso
 
 ## DNS
 
-`dns` lists resolver IP addresses (IPv4 or IPv6) and `dns_options` lists `resolv.conf` options for one service. Both are optional; without them the runtime default applies. Changing either replaces the container.
+`dns` lists upstream resolver IP addresses (IPv4 or IPv6) and `dns_options` lists `resolv.conf` options for one service. Both are optional; without them the runtime default applies. Changing either replaces the container.
 
-Use them when the runtime resolver fails, for example rootless Podman's aardvark-dns on large upstream answers. On Docker the embedded resolver (`127.0.0.11`) stays in `/etc/resolv.conf` and forwards external names to `dns`, so service names on the app network still resolve. On Podman, check that service-to-service names still resolve with your Podman version: depending on the version, custom servers are either forwarded by aardvark-dns or replace it.
+On an app network, Docker and Podman keep their network resolver in `/etc/resolv.conf` (Docker's embedded DNS, Podman's aardvark-dns). `dns` sets the upstream servers that resolver forwards to; it does not replace it, so service names keep resolving. It does not bypass aardvark-dns, so it does not work around aardvark-dns issues such as failures on large upstream answers. `dns_options` lands in `/etc/resolv.conf`.
 
 ## Resource Limits
 

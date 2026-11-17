@@ -102,8 +102,9 @@ type AppService struct {
 	Image     string
 	Command   []string
 	StopGrace time.Duration
-	// DNS lists resolver IP addresses for the container. Empty keeps the
-	// runtime default resolver configuration.
+	// DNS lists upstream resolver IPs for the container. On a network with
+	// a runtime resolver they become its upstreams; they do not replace it.
+	// Empty keeps the runtime default.
 	DNS []string `json:",omitempty"`
 	// DNSOptions lists resolv.conf options (for example "ndots:1").
 	DNSOptions []string `json:",omitempty"`

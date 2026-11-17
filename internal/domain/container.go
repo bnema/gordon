@@ -138,7 +138,7 @@ type ContainerConfig struct {
 	NetworkMode       string       // Network to join
 	Hostname          string       // Container hostname for DNS
 	Aliases           []string     // Additional network aliases
-	DNS               []netip.Addr // Resolver servers (nil = runtime default)
+	DNS               []netip.Addr // Upstream resolver servers (nil = runtime default)
 	DNSOptions        []string     // resolv.conf options (nil = runtime default)
 	MemoryLimit       int64        // Memory limit in bytes (0 = no limit)
 	MemorySwap        int64        // Total memory plus swap in bytes (0 = runtime default)
