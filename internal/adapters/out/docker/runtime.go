@@ -1803,7 +1803,7 @@ func streamVolumeArchiveLogs(logs io.ReadCloser, pw *io.PipeWriter, statusCh <-c
 	var stderr bytes.Buffer
 	_, copyErr := stdcopy.StdCopy(pw, &stderr, logs)
 	statusCode, waitErr := waitForVolumeArchiveContainer(statusCh, errCh)
-	closeVolumeArchivePipe(pw, copyErr, waitErr, statusCode, stderr.String())
+	closeVolumeArchivePipe(pw, copyErr, waitErr, statusCode, stderr.String(), log)
 }
 
 func waitForVolumeArchiveContainer(statusCh <-chan container.WaitResponse, errCh <-chan error) (int64, error) {
@@ -1827,17 +1827,49 @@ func waitForVolumeArchiveContainer(statusCh <-chan container.WaitResponse, errCh
 	return 0, fmt.Errorf("volume archive helper container wait channels closed")
 }
 
-func closeVolumeArchivePipe(pw *io.PipeWriter, copyErr, waitErr error, statusCode int64, stderr string) {
+func closeVolumeArchivePipe(pw *io.PipeWriter, copyErr, waitErr error, statusCode int64, stderr string, log zerowrap.Logger) {
 	switch {
 	case copyErr != nil:
 		_ = pw.CloseWithError(copyErr)
 	case waitErr != nil:
 		_ = pw.CloseWithError(waitErr)
+	case isVanishedFileOnlyTarFailure(statusCode, stderr):
+		log.Warn().Str("tar_stderr", strings.TrimSpace(stderr)).Msg("files vanished during volume archive; backup continues without them")
+		_ = pw.Close()
 	case statusCode != 0:
 		_ = pw.CloseWithError(fmt.Errorf("volume archive helper exited with code %d: %s", statusCode, strings.TrimSpace(stderr)))
 	default:
 		_ = pw.Close()
 	}
+}
+
+// isVanishedFileOnlyTarFailure reports whether a tar exit is only caused by
+// files removed while archiving (e.g. SQLite journals). It fails closed: exit
+// code 1 is tolerated only when every stderr line is a known vanished-file or
+// summary message from busybox or GNU tar.
+func isVanishedFileOnlyTarFailure(statusCode int64, stderr string) bool {
+	if statusCode != 1 {
+		return false
+	}
+	vanished := false
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		switch {
+		case line == "tar: error exit delayed from previous errors",
+			line == "tar: Exiting with failure status due to previous errors":
+		case strings.HasPrefix(line, "tar: ") && (strings.HasSuffix(line, ": No such file or directory") ||
+			strings.HasSuffix(line, ": file removed before we read it") ||
+			strings.HasSuffix(line, ": File removed before we read it") ||
+			strings.HasSuffix(line, ": file changed as we read it")):
+			vanished = true
+		default:
+			return false
+		}
+	}
+	return vanished
 }
 
 func volumeArchiveCommand(compression domain.VolumeBackupCompression) (string, error) {
