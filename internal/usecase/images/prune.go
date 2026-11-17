@@ -247,18 +247,24 @@ type registryPlan struct {
 // protectClosureTags protects every digest-named tag whose manifest is
 // part of a retained closure. Legacy tags.json files can list child or
 // mirror digests as tags; deleting such a "tag" removes the manifest
-// file a retained index or digest pin still needs.
+// file a retained index or digest pin still needs. When the closure is
+// incomplete, an unread node could list any digest tag as a child, so
+// the remaining eligible digest tags become unknown. Named tags keep
+// their verdict: deleting one removes only its own file.
 func protectClosureTags(verdicts []domain.RegistryTagVerdict, c *closure) {
 	for i := range verdicts {
 		verdict := &verdicts[i]
-		if verdict.Verdict != domain.PruneVerdictEligible {
+		if verdict.Verdict != domain.PruneVerdictEligible || !domain.ValidOCIDigest(verdict.Ref.Tag) {
 			continue
 		}
-		if !domain.ValidOCIDigest(verdict.Ref.Tag) || !c.references(verdict.Ref.Tag) {
-			continue
+		switch {
+		case c.references(verdict.Ref.Tag):
+			verdict.Verdict = domain.PruneVerdictProtected
+			verdict.Reasons = domain.CanonicalReasons(domain.PruneReasonProtectedSharedContent)
+		case !c.complete:
+			verdict.Verdict = domain.PruneVerdictUnknown
+			verdict.Reasons = domain.CanonicalReasons(domain.PruneReasonUnknownManifest)
 		}
-		verdict.Verdict = domain.PruneVerdictProtected
-		verdict.Reasons = domain.CanonicalReasons(domain.PruneReasonProtectedSharedContent)
 	}
 }
 

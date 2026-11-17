@@ -210,3 +210,35 @@ func TestPrune_MissingSubjectOfIndexChildStaysGap(t *testing.T) {
 	assert.Contains(t, report.Plan.Gaps[0].Detail, "retained manifest not found for app@"+f.missing)
 	assert.Equal(t, domain.PruneVerdictUnknown, blobVerdicts(report)[f.orphan])
 }
+
+// TestPrune_DigestTagBehindUnreadableClosureNodeStaysUnknown proves a
+// digest-named tag is never deleted while the retained closure is
+// incomplete: an unreadable node could be hiding it as a child.
+func TestPrune_DigestTagBehindUnreadableClosureNodeStaysUnknown(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	manifests := newFakeManifestStorage()
+	manifests.repositories = []string{"app"}
+
+	nested := testDigest("nested-index")
+	tags := []string{"latest", "v1"}
+	manifests.manifests[manifestRefKey("app", "latest")] = mustManifestIndexJSON(t, nested)
+	manifests.modTimes[manifestRefKey("app", "latest")] = now
+	manifests.manifests[manifestRefKey("app", "v1")] = mustManifestJSON(t, testDigest("v1-config"))
+	manifests.modTimes[manifestRefKey("app", "v1")] = now.Add(-time.Hour)
+	manifests.getErrs = map[string]error{manifestRefKey("app", nested): errors.New("permission denied")}
+	for index, seed := range []string{"c1", "c2", "c3", "c4"} {
+		body := mustManifestJSON(t, testDigest(seed+"-config"))
+		child := manifestBodyDigest(body)
+		manifests.manifests[manifestRefKey("app", child)] = body
+		manifests.modTimes[manifestRefKey("app", child)] = now.Add(time.Duration(-10-index) * 24 * time.Hour)
+		tags = append(tags, child)
+	}
+	manifests.tagsByRepo["app"] = tags
+
+	svc, _ := newPruneService(t, manifests, &fakeBlobStorage{}, &fakeProtectionStore{}, &fakePruneRuntime{})
+	report, err := svc.Prune(context.Background(), domain.ImagePruneOptions{KeepLast: 1, PruneRegistry: true})
+	require.NoError(t, err)
+
+	assert.Empty(t, manifests.deletedManifests, "an incomplete closure must not authorize digest tag deletion")
+	assert.Equal(t, 4, len(report.Plan.CandidatesOfKind(domain.PruneResourceRegistryTag, domain.PruneVerdictUnknown)))
+}
