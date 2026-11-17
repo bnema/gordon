@@ -228,9 +228,29 @@ func (s *Service) planRegistry(snapshot *domain.PruneProtectionSnapshot, keepLas
 		Complete: complete,
 	})
 
-	blobs, blobGaps := s.planRegistryBlobs(snapshot, verdicts, tags, complete, repositories)
+	closure := s.buildRetainedClosure(snapshot, verdicts, tags, complete, repositories)
+	protectClosureTags(verdicts, closure)
+	blobs, blobGaps := s.planRegistryBlobs(snapshot, closure)
 	gaps = append(gaps, blobGaps...)
 	return verdicts, blobs, gaps
+}
+
+// protectClosureTags protects every digest-named tag whose manifest is
+// part of a retained closure. Legacy tags.json files can list child or
+// mirror digests as tags; deleting such a "tag" removes the manifest
+// file a retained index or digest pin still needs.
+func protectClosureTags(verdicts []domain.RegistryTagVerdict, c *closure) {
+	for i := range verdicts {
+		verdict := &verdicts[i]
+		if verdict.Verdict != domain.PruneVerdictEligible {
+			continue
+		}
+		if !domain.ValidOCIDigest(verdict.Ref.Tag) || !c.references(verdict.Ref.Tag) {
+			continue
+		}
+		verdict.Verdict = domain.PruneVerdictProtected
+		verdict.Reasons = domain.CanonicalReasons(domain.PruneReasonProtectedSharedContent)
+	}
 }
 
 // inventoryRepository inventories one repository's tags and their
@@ -311,20 +331,16 @@ func (s *Service) inventoryRepository(repository string) ([]pruneguard.RegistryT
 	return candidates, gaps
 }
 
-// planRegistryBlobs computes one verdict per stored blob.
-//
-// Blobs reachable from the retained (protected or kept) manifest set
-// are protected. When any retained closure could not be read or parsed
-// completely, unreferenced blobs become unknown instead of eligible: an
-// incomplete reference set is never proof of unreachability.
-func (s *Service) planRegistryBlobs(
+// buildRetainedClosure walks the transitive reference set of every
+// manifest the plan keeps: retained tags, unreadable tags, and durable
+// digest roots in local repositories.
+func (s *Service) buildRetainedClosure(
 	snapshot *domain.PruneProtectionSnapshot,
 	verdicts []domain.RegistryTagVerdict,
 	tags []pruneguard.RegistryTagCandidate,
 	inventoryComplete bool,
 	repositories []string,
-) ([]domain.OCIBlobVerdict, []domain.InventoryGap) {
-	now := time.Now().UTC()
+) *closure {
 
 	// Roots are every tag the plan does not delete: retained tags and
 	// any tag whose manifest could not be read at all (which has no
@@ -372,6 +388,17 @@ func (s *Service) planRegistryBlobs(
 		}
 		s.traverseClosure(retainedRoot{Repository: root.Repository, Reference: root.Ref}, closure)
 	}
+	return closure
+}
+
+// planRegistryBlobs computes one verdict per stored blob.
+//
+// Blobs reachable from the retained (protected or kept) manifest set
+// are protected. When any retained closure could not be read or parsed
+// completely, unreferenced blobs become unknown instead of eligible: an
+// incomplete reference set is never proof of unreachability.
+func (s *Service) planRegistryBlobs(snapshot *domain.PruneProtectionSnapshot, closure *closure) ([]domain.OCIBlobVerdict, []domain.InventoryGap) {
+	now := time.Now().UTC()
 
 	// Durable roots claim digests directly as well as through tag
 	// closure: an app service, apply intent, or unfinished operation
