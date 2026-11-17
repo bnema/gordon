@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"net/netip"
 	"path"
 	"reflect"
 	"regexp"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // App manifest validation is owned by the domain.
@@ -100,10 +102,15 @@ type AppService struct {
 	Image     string
 	Command   []string
 	StopGrace time.Duration
-	Readiness AppReadiness
-	HTTP      []AppHTTPInterface
-	TCP       []AppTCPInterface
-	UDP       []AppUDPInterface
+	// DNS lists resolver IP addresses for the container. Empty keeps the
+	// runtime default resolver configuration.
+	DNS []string `json:",omitempty"`
+	// DNSOptions lists resolv.conf options (for example "ndots:1").
+	DNSOptions []string `json:",omitempty"`
+	Readiness  AppReadiness
+	HTTP       []AppHTTPInterface
+	TCP        []AppTCPInterface
+	UDP        []AppUDPInterface
 	// Env is non-secret per-service environment. It overrides app-wide
 	// [env] for the same key; its keys must be disjoint from Secrets.
 	Env     map[string]string
@@ -558,6 +565,9 @@ func (s *AppService) validate() error {
 	if s.StopGrace <= 0 || s.StopGrace > AppMaxStopGrace {
 		return fmt.Errorf("%w: service %q stop_grace must be within (0, 5m]", ErrInvalidAppSpec, s.Name)
 	}
+	if err := s.validateDNS(); err != nil {
+		return err
+	}
 	if err := s.Readiness.validate(s); err != nil {
 		return err
 	}
@@ -587,6 +597,43 @@ func (s *AppService) validate() error {
 		return err
 	}
 	return nil
+}
+
+// validateDNS checks resolver addresses and options.
+func (s *AppService) validateDNS() error {
+	seen := make(map[netip.Addr]struct{}, len(s.DNS))
+	for _, raw := range s.DNS {
+		addr, err := netip.ParseAddr(raw)
+		if err != nil || addr.Zone() != "" {
+			return fmt.Errorf("%w: service %q dns %q is not an IP address", ErrInvalidAppSpec, s.Name, raw)
+		}
+		if _, dup := seen[addr]; dup {
+			return fmt.Errorf("%w: service %q dns %q is duplicated", ErrInvalidAppSpec, s.Name, raw)
+		}
+		seen[addr] = struct{}{}
+	}
+	for _, opt := range s.DNSOptions {
+		if opt == "" || strings.ContainsFunc(opt, unicode.IsSpace) {
+			return fmt.Errorf("%w: service %q dns_options entry %q is invalid", ErrInvalidAppSpec, s.Name, opt)
+		}
+	}
+	return nil
+}
+
+// DNSAddrs returns the parsed resolver addresses, nil when DNS is unset.
+func (s AppService) DNSAddrs() ([]netip.Addr, error) {
+	if len(s.DNS) == 0 {
+		return nil, nil
+	}
+	addrs := make([]netip.Addr, 0, len(s.DNS))
+	for _, raw := range s.DNS {
+		addr, err := netip.ParseAddr(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%w: service %q dns %q is not an IP address", ErrInvalidAppSpec, s.Name, raw)
+		}
+		addrs = append(addrs, addr)
+	}
+	return addrs, nil
 }
 
 // validateInterfaces checks HTTP/TCP/UDP entries and their port ownership.
@@ -1127,6 +1174,9 @@ func diffService(name string, desired, effective AppService) []string {
 	}
 	if desired.StopGrace != effective.StopGrace {
 		changed = append(changed, "service/"+name+"/stop_grace")
+	}
+	if !slices.Equal(desired.DNS, effective.DNS) || !slices.Equal(desired.DNSOptions, effective.DNSOptions) {
+		changed = append(changed, "service/"+name+"/dns")
 	}
 	if desired.Readiness != effective.Readiness {
 		changed = append(changed, "service/"+name+"/readiness")

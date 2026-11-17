@@ -44,15 +44,18 @@ type rawNetwork struct {
 // rawService mirrors one [services.<name>] table. The service name is
 // the table key, so there is no name field inside the table.
 type rawService struct {
-	Resources rawResources      `toml:"resources"`
-	Image     string            `toml:"image"`
-	Command   []string          `toml:"command"`
-	StopGrace string            `toml:"stop_grace"`
-	Env       map[string]string `toml:"env"`
-	Readiness rawReadiness      `toml:"readiness"`
-	HTTP      []rawHTTP         `toml:"http"`
-	TCP       []rawTCP          `toml:"tcp"`
-	UDP       []rawUDP          `toml:"udp"`
+	Resources rawResources `toml:"resources"`
+	Image     string       `toml:"image"`
+	Command   []string     `toml:"command"`
+	StopGrace string       `toml:"stop_grace"`
+	// DNS and DNSOptions override the container resolver configuration.
+	DNS        []string          `toml:"dns"`
+	DNSOptions []string          `toml:"dns_options"`
+	Env        map[string]string `toml:"env"`
+	Readiness  rawReadiness      `toml:"readiness"`
+	HTTP       []rawHTTP         `toml:"http"`
+	TCP        []rawTCP          `toml:"tcp"`
+	UDP        []rawUDP          `toml:"udp"`
 	// Secrets maps env keys to a secret name string or to a table
 	// { name = "...", as = "env"|"file" }; see toDomainSecrets.
 	Secrets map[string]any `toml:"secrets"`
@@ -315,10 +318,12 @@ func toDomainHTTP(service string, h rawHTTP) (domain.AppHTTPInterface, error) {
 // [services.<name>] table key and becomes the service identity.
 func toDomainService(serviceName string, raw rawService) (domain.AppService, error) {
 	svc := domain.AppService{
-		Name:    serviceName,
-		Image:   normalizeImage(raw.Image),
-		Command: append([]string(nil), raw.Command...),
-		Secrets: map[string]string{},
+		Name:       serviceName,
+		Image:      normalizeImage(raw.Image),
+		Command:    append([]string(nil), raw.Command...),
+		DNS:        append([]string(nil), raw.DNS...),
+		DNSOptions: append([]string(nil), raw.DNSOptions...),
+		Secrets:    map[string]string{},
 		Backup: domain.AppBackup{
 			Postgres: append([]string(nil), raw.Backup.Postgres...),
 			Volume:   append([]string(nil), raw.Backup.Volume...),

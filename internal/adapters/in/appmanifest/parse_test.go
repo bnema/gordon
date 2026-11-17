@@ -657,3 +657,33 @@ capabilities = ` + list + `
 		require.ErrorIs(t, err, domain.ErrInvalidAppSpec, list)
 	}
 }
+
+func TestParse_ServiceDNS(t *testing.T) {
+	doc := "name = \"blog\"\n[services.web]\nimage = \"img:1\"\n" +
+		"dns = [\"9.9.9.9\", \"2620:fe::fe\"]\ndns_options = [\"ndots:1\", \"edns0\"]\n" +
+		"[services.worker]\nimage = \"img:1\"\n"
+	spec, _, err := appmanifest.Parse([]byte(doc), "blog.toml")
+	require.NoError(t, err)
+	require.Len(t, spec.Services, 2)
+	assert.Equal(t, []string{"9.9.9.9", "2620:fe::fe"}, spec.Services[0].DNS)
+	assert.Equal(t, []string{"ndots:1", "edns0"}, spec.Services[0].DNSOptions)
+	assert.Nil(t, spec.Services[1].DNS)
+	assert.Nil(t, spec.Services[1].DNSOptions)
+}
+
+func TestParse_ServiceDNSInvalid(t *testing.T) {
+	cases := map[string]string{
+		"hostname":     "dns = [\"dns.example.com\"]\n",
+		"duplicate":    "dns = [\"9.9.9.9\", \"9.9.9.9\"]\n",
+		"zone":         "dns = [\"fe80::1%eth0\"]\n",
+		"empty option": "dns_options = [\"\"]\n",
+		"space option": "dns_options = [\"ndots: 1\"]\n",
+	}
+	for name, line := range cases {
+		t.Run(name, func(t *testing.T) {
+			doc := "name = \"blog\"\n[services.web]\nimage = \"img:1\"\n" + line
+			_, _, err := appmanifest.Parse([]byte(doc), "blog.toml")
+			require.ErrorIs(t, err, domain.ErrInvalidAppSpec)
+		})
+	}
+}
