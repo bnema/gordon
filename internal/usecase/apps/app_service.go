@@ -405,7 +405,7 @@ func (s *AppServiceImpl) desiredPending(ctx context.Context, desired domain.AppD
 	return err != nil || !converged
 }
 
-// retainedView lists the resources the app owns and would retain on
+// retainedView lists the resources the live app owns and would retain on
 // removal, sorted for stable output.
 func retainedView(ownership domain.AppOwnership) in.AppRetainedView {
 	view := in.AppRetainedView{}
@@ -420,6 +420,11 @@ func retainedView(ownership domain.AppOwnership) in.AppRetainedView {
 		view.Secrets = append(view.Secrets, secret.Path)
 	}
 	for _, image := range ownership.Images {
+		// Released entries are superseded images kept only so prune can
+		// match them; the live app no longer owns them.
+		if image.State == domain.AppResourceReleased {
+			continue
+		}
 		view.Images = append(view.Images, image.Reference)
 	}
 	sort.Strings(view.Volumes)

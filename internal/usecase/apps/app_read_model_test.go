@@ -68,6 +68,7 @@ func TestAppService_Show_ConvergedAppWithRetainedResources(t *testing.T) {
 			{Service: "web", Env: "DATABASE_URL", Name: "database-url", Path: "gordon/apps/app-1/blog/web/database-url", State: domain.AppResourceAttached},
 		},
 		Images: []domain.AppOwnedImage{
+			{Service: "web", Reference: "registry.example.com/blog/web:1.4.1", Digest: "sha256:old", State: domain.AppResourceReleased},
 			{Service: "web", Reference: "registry.example.com/blog/web:1.4.2", State: domain.AppResourceAttached},
 		},
 		Services: map[string]domain.AppServiceRecovery{"web": {RestartUnsafe: true}},

@@ -149,3 +149,31 @@ func TestPlanRuntimeImagesIncludeUnmanagedDangling(t *testing.T) {
 		})
 	}
 }
+
+// TestPlanRuntimeImagesBareDigestRootProtectsReleasedImage proves a root
+// that names content by bare digest (an active service or an unfinished
+// operation) protects a runtime image known only by its repo digest, even
+// when a released claim would otherwise make it eligible.
+func TestPlanRuntimeImagesBareDigestRootProtectsReleasedImage(t *testing.T) {
+	contentDigest := digest("e")
+	image := domain.RuntimeImage{
+		ID:          digest("f"),
+		RepoTags:    []string{"reg.example.com/shop:<none>"},
+		RepoDigests: []string{"reg.example.com/shop@" + contentDigest},
+	}
+	for _, kind := range []domain.ProtectionRootKind{domain.ProtectionActiveService, domain.ProtectionOperation} {
+		t.Run(string(kind), func(t *testing.T) {
+			verdicts := PlanRuntimeImages(RuntimePlanInput{
+				Images: []domain.RuntimeImage{image},
+				Snapshot: &domain.PruneProtectionSnapshot{
+					Roots:       []domain.ProtectionRoot{{Kind: kind, Ref: contentDigest, Owner: "shop"}},
+					ImageClaims: []domain.ImageClaim{{Digest: contentDigest, App: "shop", State: domain.VolumeClaimReleased}},
+				},
+				Complete: true,
+			})
+			if verdicts[0].Verdict != domain.PruneVerdictProtected {
+				t.Fatalf("verdict = %v %v, want protected", verdicts[0].Verdict, verdicts[0].Reasons)
+			}
+		})
+	}
+}

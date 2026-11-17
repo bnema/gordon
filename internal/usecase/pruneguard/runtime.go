@@ -116,18 +116,10 @@ func planRuntimeImage(image domain.RuntimeImage, uses containerUseIndex, input R
 	// A durable root wins over provenance: a still-referenced image
 	// stays protected even if its labels are gone. Repo tags are the
 	// runtime-side identity of app-pinned content, so they are matched
-	// against tag-keyed roots as well as digests.
-	refs := append([]string{image.ID}, image.RepoDigests...)
-	for _, repoTag := range image.RepoTags {
-		if isPlaceholderRepoTag(repoTag) {
-			continue
-		}
-		refs = append(refs, repoTag)
-		if tagRef, ok := domain.ParseRegistryTagRef(repoTag); ok {
-			refs = append(refs, tagRef.Key())
-		}
-	}
-	if matched, reasons := rootReasonsOrFallback(input.Snapshot, refs...); matched {
+	// against tag-keyed roots as well as digests. The bare digest of each
+	// repo digest is matched too: roots such as an active service's pinned
+	// digest name content without its repository.
+	if matched, reasons := rootReasonsOrFallback(input.Snapshot, imageIdentities(image)...); matched {
 		verdict.Verdict, verdict.Reasons = protected(reasons, domain.PruneReasonProtectedSharedContent)
 		return verdict
 	}
