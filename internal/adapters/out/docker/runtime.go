@@ -1877,7 +1877,9 @@ func volumeArchiveCommand(compression domain.VolumeBackupCompression) (string, e
 	case domain.VolumeBackupCompressionGzip:
 		return "cd /volume && tar -czf - .", nil
 	case domain.VolumeBackupCompressionZstd:
-		return "cd /volume && fifo=/tmp/gordon-volume-backup.tar && mkfifo $fifo && zstd -T0 -c $fifo & zstd_pid=$! && tar -cf $fifo .; tar_status=$?; wait $zstd_pid; zstd_status=$?; if [ $tar_status -ne 0 ]; then exit $tar_status; fi; exit $zstd_status", nil
+		// Separate statements so only zstd is backgrounded; a zstd failure
+		// exits 3 so it is never mistaken for a tolerated tar exit 1.
+		return `cd /volume || exit 1; fifo=/tmp/gordon-volume-backup.tar; mkfifo "$fifo" || exit 1; zstd -T0 -c "$fifo" & zstd_pid=$!; tar -cf "$fifo" .; tar_status=$?; wait $zstd_pid; zstd_status=$?; if [ $zstd_status -ne 0 ]; then echo "gordon: zstd compression failed with status $zstd_status" >&2; exit 3; fi; exit $tar_status`, nil
 	default:
 		return "", fmt.Errorf("unsupported volume backup compression: %s", compression)
 	}
