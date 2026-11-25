@@ -42,25 +42,35 @@ func newRunRegistry[J any](meta func(J) runMeta) *runRegistry[J] {
 	}
 }
 
-// begin records a new running run of target unless one is already
-// running. It returns the running job and false in that case.
+// begin records job as the new running run of its target unless the
+// target already has a running run. It returns that run and false then.
+// Every run starts through begin, so a target never runs twice at once.
 func (r *runRegistry[J]) begin(job J) (J, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if prevID, ok := r.latest[r.meta(job).target]; ok {
+	meta := r.meta(job)
+	if prevID, ok := r.latest[meta.target]; ok {
 		if prev, ok := r.runs[prevID]; ok && prev.status == domain.BackupStatusRunning {
 			return prev.job, false
 		}
 	}
-	r.storeLocked(job)
+	r.order = append(r.order, meta.id)
+	r.runs[meta.id] = runEntry[J]{runMeta: meta, job: job}
+	r.latest[meta.target] = meta.id
+	r.evictLocked()
 	return job, true
 }
 
-// put records the current state of one run.
+// put records the new state of a run begun earlier. It never changes
+// which run is the latest of its target, and ignores unknown runs.
 func (r *runRegistry[J]) put(job J) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.storeLocked(job)
+	meta := r.meta(job)
+	if _, ok := r.runs[meta.id]; !ok {
+		return
+	}
+	r.runs[meta.id] = runEntry[J]{runMeta: meta, job: job}
 }
 
 // get returns one tracked run by ID.
@@ -84,16 +94,6 @@ func (r *runRegistry[J]) unsettled() []J {
 		}
 	}
 	return jobs
-}
-
-func (r *runRegistry[J]) storeLocked(job J) {
-	meta := r.meta(job)
-	if _, exists := r.runs[meta.id]; !exists {
-		r.order = append(r.order, meta.id)
-	}
-	r.runs[meta.id] = runEntry[J]{runMeta: meta, job: job}
-	r.latest[meta.target] = meta.id
-	r.evictLocked()
 }
 
 // evictLocked drops the oldest finished runs that are no longer the

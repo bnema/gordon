@@ -79,12 +79,6 @@ type BackupJob struct {
 	Metadata    map[string]string
 }
 
-// BackupResult is returned after a backup operation completes.
-type BackupResult struct {
-	Job      BackupJob
-	Duration time.Duration
-}
-
 // BackupKind tells database dumps and volume archives apart in metrics.
 type BackupKind string
 
@@ -116,9 +110,6 @@ type BackupRunRecord struct {
 
 // DatabaseBackupJob represents a logical database backup operation.
 type DatabaseBackupJob = BackupJob
-
-// DatabaseBackupResult is returned after a database backup operation completes.
-type DatabaseBackupResult = BackupResult
 
 // RetentionPolicy defines how many backups to keep per schedule tier.
 type RetentionPolicy struct {

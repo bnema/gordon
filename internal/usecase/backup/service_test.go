@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"bnema.dev/zerowrap"
@@ -104,45 +105,47 @@ func TestService_TargetsSkipStoppedApps(t *testing.T) {
 	assert.Empty(t, targets)
 }
 
-// TestService_RunBackup_StoresUnderAppIdentity proves a run dumps from the
+// TestService_StartBackup_StoresUnderAppIdentity proves a run dumps from the
 // declared service container and stores the artifact under the app name.
-func TestService_RunBackup_StoresUnderAppIdentity(t *testing.T) {
-	state := outmocks.NewMockAppStateReader(t)
-	state.EXPECT().LoadIntent(mock.Anything, "shop").Return(domain.AppStopIntent{App: "shop"}, nil).Once()
-	state.EXPECT().LoadActive(mock.Anything, "shop").Return(activeWith("shop", map[string]domain.AppService{
-		"api": appSpecWithDatabase("api", "orders", "daily"),
-	}, "ctr-api"), true, nil).Once()
+func TestService_StartBackup_StoresUnderAppIdentity(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		state := outmocks.NewMockAppStateReader(t)
+		state.EXPECT().LoadIntent(mock.Anything, "shop").Return(domain.AppStopIntent{App: "shop"}, nil).Once()
+		state.EXPECT().LoadActive(mock.Anything, "shop").Return(activeWith("shop", map[string]domain.AppService{
+			"api": appSpecWithDatabase("api", "orders", "daily"),
+		}, "ctr-api"), true, nil).Once()
 
-	runtime, storage, svc := backupTestService(t, state)
-	runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.MatchedBy(func(cmd []string) bool {
-		return len(cmd) == 3 && strings.Contains(cmd[2], "'orders'") && !strings.Contains(cmd[2], "POSTGRES_DB")
-	})).Return(&out.ExecResult{ExitCode: 0}, nil).Once()
-	runtime.EXPECT().CopyFromContainer(mock.Anything, "ctr-api", mock.Anything).
-		Return(io.NopCloser(strings.NewReader("dump-bytes")), nil).Once()
-	runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.MatchedBy(func(cmd []string) bool {
-		return len(cmd) == 3 && strings.HasPrefix(cmd[2], "rm -f ")
-	})).Return(&out.ExecResult{ExitCode: 0}, nil).Once()
-	storage.EXPECT().Store(mock.Anything, "shop", "api", "orders", domain.BackupSchedule(""), mock.Anything, mock.Anything).
-		RunAndReturn(func(_ context.Context, _, _, _ string, _ domain.BackupSchedule, _ time.Time, data io.Reader) (string, error) {
-			if _, err := io.Copy(io.Discard, data); err != nil {
-				return "", err
-			}
-			return "/backups/shop/orders/manual/file.bak", nil
-		}).Once()
+		runtime, storage, svc := backupTestService(t, state)
+		runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.MatchedBy(func(cmd []string) bool {
+			return len(cmd) == 3 && strings.Contains(cmd[2], "'orders'") && !strings.Contains(cmd[2], "POSTGRES_DB")
+		})).Return(&out.ExecResult{ExitCode: 0}, nil).Once()
+		runtime.EXPECT().CopyFromContainer(mock.Anything, "ctr-api", mock.Anything).
+			Return(io.NopCloser(strings.NewReader("dump-bytes")), nil).Once()
+		runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.MatchedBy(func(cmd []string) bool {
+			return len(cmd) == 3 && strings.HasPrefix(cmd[2], "rm -f ")
+		})).Return(&out.ExecResult{ExitCode: 0}, nil).Once()
+		storage.EXPECT().Store(mock.Anything, "shop", "api", "orders", domain.BackupSchedule(""), mock.Anything, mock.Anything).
+			RunAndReturn(func(_ context.Context, _, _, _ string, _ domain.BackupSchedule, _ time.Time, data io.Reader) (string, error) {
+				if _, err := io.Copy(io.Discard, data); err != nil {
+					return "", err
+				}
+				return "/backups/shop/orders/manual/file.bak", nil
+			}).Once()
 
-	job, err := runBackupToEnd(t, svc, "shop", "api", "orders")
-	require.NoError(t, err)
-	assert.Equal(t, "shop", job.App)
-	assert.Equal(t, "api", job.Service)
-	assert.Equal(t, "orders", job.DBName)
-	assert.Equal(t, int64(len("dump-bytes")), job.SizeBytes)
-	assert.Equal(t, domain.BackupStatusCompleted, job.Status)
+		job, err := runBackupToEnd(t, svc, "shop", "api", "orders")
+		require.NoError(t, err)
+		assert.Equal(t, "shop", job.App)
+		assert.Equal(t, "api", job.Service)
+		assert.Equal(t, "orders", job.DBName)
+		assert.Equal(t, int64(len("dump-bytes")), job.SizeBytes)
+		assert.Equal(t, domain.BackupStatusCompleted, job.Status)
+	})
 }
 
-// TestService_RunBackup_SelectorRules proves the explicit-selector rules:
+// TestService_StartBackup_SelectorRules proves the explicit-selector rules:
 // a missing selector with several candidates lists them, and an unknown
 // target is not found.
-func TestService_RunBackup_SelectorRules(t *testing.T) {
+func TestService_StartBackup_SelectorRules(t *testing.T) {
 	ctx := context.Background()
 	state := outmocks.NewMockAppStateReader(t)
 	active := activeWith("shop", map[string]domain.AppService{
@@ -233,45 +236,75 @@ func TestService_ListBackupsUsesAppIdentity(t *testing.T) {
 // backup keeps running after the caller's context is cancelled, and that
 // a second start reuses the running job.
 func TestService_StartBackup_OutlivesTheCaller(t *testing.T) {
-	state := outmocks.NewMockAppStateReader(t)
-	for range 2 {
-		state.EXPECT().LoadIntent(mock.Anything, "shop").Return(domain.AppStopIntent{App: "shop"}, nil).Once()
-		state.EXPECT().LoadActive(mock.Anything, "shop").Return(activeWith("shop", map[string]domain.AppService{
-			"api": appSpecWithDatabase("api", "orders", "daily"),
-		}, "ctr-api"), true, nil).Once()
-	}
-	runtime, storage, svc := backupTestService(t, state)
-	release := make(chan struct{})
-	runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.MatchedBy(func(cmd []string) bool {
-		return strings.Contains(cmd[2], "pg_dump")
-	})).RunAndReturn(func(context.Context, string, []string) (*out.ExecResult, error) {
-		<-release
-		return &out.ExecResult{ExitCode: 0}, nil
-	}).Once()
-	runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.Anything).Return(&out.ExecResult{ExitCode: 0}, nil).Once()
-	runtime.EXPECT().CopyFromContainer(mock.Anything, "ctr-api", mock.Anything).
-		Return(io.NopCloser(strings.NewReader("dump")), nil).Once()
-	storage.EXPECT().Store(mock.Anything, "shop", "api", "orders", domain.BackupSchedule(""), mock.Anything, mock.Anything).
-		RunAndReturn(func(ctx context.Context, _, _, _ string, _ domain.BackupSchedule, _ time.Time, data io.Reader) (string, error) {
-			if err := ctx.Err(); err != nil {
-				return "", err
-			}
-			_, err := io.Copy(io.Discard, data)
-			return "/b/file.bak", err
+	synctest.Test(t, func(t *testing.T) {
+		state := outmocks.NewMockAppStateReader(t)
+		for range 2 {
+			state.EXPECT().LoadIntent(mock.Anything, "shop").Return(domain.AppStopIntent{App: "shop"}, nil).Once()
+			state.EXPECT().LoadActive(mock.Anything, "shop").Return(activeWith("shop", map[string]domain.AppService{
+				"api": appSpecWithDatabase("api", "orders", "daily"),
+			}, "ctr-api"), true, nil).Once()
+		}
+		runtime, storage, svc := backupTestService(t, state)
+		release := make(chan struct{})
+		runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.MatchedBy(func(cmd []string) bool {
+			return strings.Contains(cmd[2], "pg_dump")
+		})).RunAndReturn(func(context.Context, string, []string) (*out.ExecResult, error) {
+			<-release
+			return &out.ExecResult{ExitCode: 0}, nil
 		}).Once()
+		runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.Anything).Return(&out.ExecResult{ExitCode: 0}, nil).Once()
+		runtime.EXPECT().CopyFromContainer(mock.Anything, "ctr-api", mock.Anything).
+			Return(io.NopCloser(strings.NewReader("dump")), nil).Once()
+		storage.EXPECT().Store(mock.Anything, "shop", "api", "orders", domain.BackupSchedule(""), mock.Anything, mock.Anything).
+			RunAndReturn(func(ctx context.Context, _, _, _ string, _ domain.BackupSchedule, _ time.Time, data io.Reader) (string, error) {
+				if err := ctx.Err(); err != nil {
+					return "", err
+				}
+				_, err := io.Copy(io.Discard, data)
+				return "/b/file.bak", err
+			}).Once()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	job, err := svc.StartBackup(ctx, "shop", "api", "orders")
-	require.NoError(t, err)
-	assert.Equal(t, domain.BackupStatusRunning, job.Status)
-	again, err := svc.StartBackup(context.Background(), "shop", "api", "orders")
-	require.NoError(t, err)
-	assert.Equal(t, job.ID, again.ID)
+		ctx, cancel := context.WithCancel(context.Background())
+		job, err := svc.StartBackup(ctx, "shop", "api", "orders")
+		require.NoError(t, err)
+		assert.Equal(t, domain.BackupStatusRunning, job.Status)
+		again, err := svc.StartBackup(context.Background(), "shop", "api", "orders")
+		require.NoError(t, err)
+		assert.Equal(t, job.ID, again.ID)
 
-	cancel()
-	close(release)
+		cancel()
+		close(release)
 
-	done := awaitRun(t, svc.BackupRun, job.ID, func(j domain.BackupJob) domain.BackupJobStatus { return j.Status })
-	assert.Equal(t, domain.BackupStatusCompleted, done.Status, done.Error)
-	assert.Equal(t, "/b/file.bak", done.FilePath)
+		done := awaitRun(t, svc.BackupRun, job.ID, func(j domain.BackupJob) domain.BackupJobStatus { return j.Status })
+		assert.Equal(t, domain.BackupStatusCompleted, done.Status, done.Error)
+		assert.Equal(t, "/b/file.bak", done.FilePath)
+	})
+}
+
+// TestService_StatusReportsTrackedRuns proves a failed manual run shows in
+// Status instead of the target's pending placeholder, and that an unknown
+// run ID is reported with the not-found sentinel.
+func TestService_StatusReportsTrackedRuns(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		state := outmocks.NewMockAppStateReader(t)
+		expectShopDatabase(state)
+		runtime, storage, svc := backupTestService(t, state)
+		runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.Anything).
+			Return(&out.ExecResult{ExitCode: 1, Stderr: []byte("boom")}, nil).Twice()
+
+		job, err := runBackupToEnd(t, svc, "shop", "api", "orders")
+		require.Error(t, err)
+
+		state.EXPECT().ListApps(mock.Anything).Return([]string{"shop"}, nil).Twice()
+		expectShopDatabase(state)
+		storage.EXPECT().List(mock.Anything, "shop", mock.Anything).Return(nil, nil).Once()
+		jobs, err := svc.Status(context.Background())
+		require.NoError(t, err)
+		require.Len(t, jobs, 1)
+		assert.Equal(t, job.ID, jobs[0].ID)
+		assert.Equal(t, domain.BackupStatusFailed, jobs[0].Status)
+
+		_, err = svc.BackupRun(context.Background(), "nope")
+		require.ErrorIs(t, err, domain.ErrBackupRunNotFound)
+	})
 }

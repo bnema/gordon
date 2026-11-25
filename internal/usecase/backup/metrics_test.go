@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -51,25 +52,26 @@ func TestVolumeService_RecordsRunMetrics(t *testing.T) {
 		{"export failure", errors.New("helper failed"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			state := outmocks.NewMockAppStateReader(t)
-			expectShopVolume(state)
-			metrics := outmocks.NewMockBackupMetrics(t)
-			runs := captureRuns(metrics)
-			storage := &fakeVolumeBackupStorage{}
-			svc := volumeTestService(t, state, &fakeVolumeArchiveExporter{err: tc.export}, storage, true).WithMetrics(metrics)
+			synctest.Test(t, func(t *testing.T) {
+				state := outmocks.NewMockAppStateReader(t)
+				expectShopVolume(state)
+				metrics := outmocks.NewMockBackupMetrics(t)
+				runs := captureRuns(metrics)
+				storage := &fakeVolumeBackupStorage{}
+				svc := volumeTestService(t, state, &fakeVolumeArchiveExporter{err: tc.export}, storage, true).WithMetrics(metrics)
 
-			job, _ := runVolumeBackupToEnd(t, svc, "shop", "api", "data")
-			jobs := []domain.VolumeBackupJob{job}
-			require.Len(t, *runs, 1)
-			run := (*runs)[0]
-			assert.Equal(t, shopData, run.BackupTargetRef)
-			assert.Equal(t, tc.success, run.Succeeded)
-			assert.Equal(t, jobs[0].StartedAt, run.StartedAt)
-			assert.GreaterOrEqual(t, run.Duration, time.Duration(0))
-			if tc.success {
-				assert.Equal(t, int64(len("archive")), run.SizeBytes)
-				assert.Equal(t, jobs[0].StartedAt, storage.stored[0].StartedAt, "the archive is named after the recorded start")
-			}
+				job, _ := runVolumeBackupToEnd(t, svc, "shop", "api", "data")
+				require.Len(t, *runs, 1)
+				run := (*runs)[0]
+				assert.Equal(t, shopData, run.BackupTargetRef)
+				assert.Equal(t, tc.success, run.Succeeded)
+				assert.Equal(t, job.StartedAt, run.StartedAt)
+				assert.GreaterOrEqual(t, run.Duration, time.Duration(0))
+				if tc.success {
+					assert.Equal(t, int64(len("archive")), run.SizeBytes)
+					assert.Equal(t, job.StartedAt, storage.stored[0].StartedAt, "the archive is named after the recorded start")
+				}
+			})
 		})
 	}
 }
@@ -107,47 +109,51 @@ func expectShopDatabase(state *outmocks.MockAppStateReader) {
 // recorded start is the timestamp the dump is stored under.
 func TestService_RecordsRunMetrics(t *testing.T) {
 	t.Run("pg_dump failure", func(t *testing.T) {
-		state := outmocks.NewMockAppStateReader(t)
-		expectShopDatabase(state)
-		runtime, _, svc := backupTestService(t, state)
-		metrics := outmocks.NewMockBackupMetrics(t)
-		runs := captureRuns(metrics)
-		svc.WithMetrics(metrics)
-		runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.Anything).
-			Return(&out.ExecResult{ExitCode: 1, Stderr: []byte("boom")}, nil).Twice()
+		synctest.Test(t, func(t *testing.T) {
+			state := outmocks.NewMockAppStateReader(t)
+			expectShopDatabase(state)
+			runtime, _, svc := backupTestService(t, state)
+			metrics := outmocks.NewMockBackupMetrics(t)
+			runs := captureRuns(metrics)
+			svc.WithMetrics(metrics)
+			runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.Anything).
+				Return(&out.ExecResult{ExitCode: 1, Stderr: []byte("boom")}, nil).Twice()
 
-		_, err := runBackupToEnd(t, svc, "shop", "api", "orders")
-		require.Error(t, err)
-		require.Len(t, *runs, 1)
-		assert.Equal(t, shopOrders, (*runs)[0].BackupTargetRef)
-		assert.False(t, (*runs)[0].Succeeded)
-		assert.False(t, (*runs)[0].StartedAt.IsZero())
+			_, err := runBackupToEnd(t, svc, "shop", "api", "orders")
+			require.Error(t, err)
+			require.Len(t, *runs, 1)
+			assert.Equal(t, shopOrders, (*runs)[0].BackupTargetRef)
+			assert.False(t, (*runs)[0].Succeeded)
+			assert.False(t, (*runs)[0].StartedAt.IsZero())
+		})
 	})
 
 	t.Run("success", func(t *testing.T) {
-		state := outmocks.NewMockAppStateReader(t)
-		expectShopDatabase(state)
-		runtime, storage, svc := backupTestService(t, state)
-		metrics := outmocks.NewMockBackupMetrics(t)
-		runs := captureRuns(metrics)
-		svc.WithMetrics(metrics)
-		runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.Anything).Return(&out.ExecResult{ExitCode: 0}, nil).Twice()
-		runtime.EXPECT().CopyFromContainer(mock.Anything, "ctr-api", mock.Anything).
-			Return(io.NopCloser(strings.NewReader("dump")), nil).Once()
-		var storedAt time.Time
-		storage.EXPECT().Store(mock.Anything, "shop", "api", "orders", domain.BackupSchedule(""), mock.Anything, mock.Anything).
-			RunAndReturn(func(_ context.Context, _, _, _ string, _ domain.BackupSchedule, at time.Time, data io.Reader) (string, error) {
-				storedAt = at
-				_, err := io.Copy(io.Discard, data)
-				return "/b/file.bak", err
-			}).Once()
+		synctest.Test(t, func(t *testing.T) {
+			state := outmocks.NewMockAppStateReader(t)
+			expectShopDatabase(state)
+			runtime, storage, svc := backupTestService(t, state)
+			metrics := outmocks.NewMockBackupMetrics(t)
+			runs := captureRuns(metrics)
+			svc.WithMetrics(metrics)
+			runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.Anything).Return(&out.ExecResult{ExitCode: 0}, nil).Twice()
+			runtime.EXPECT().CopyFromContainer(mock.Anything, "ctr-api", mock.Anything).
+				Return(io.NopCloser(strings.NewReader("dump")), nil).Once()
+			var storedAt time.Time
+			storage.EXPECT().Store(mock.Anything, "shop", "api", "orders", domain.BackupSchedule(""), mock.Anything, mock.Anything).
+				RunAndReturn(func(_ context.Context, _, _, _ string, _ domain.BackupSchedule, at time.Time, data io.Reader) (string, error) {
+					storedAt = at
+					_, err := io.Copy(io.Discard, data)
+					return "/b/file.bak", err
+				}).Once()
 
-		_, err := runBackupToEnd(t, svc, "shop", "api", "orders")
-		require.NoError(t, err)
-		require.Len(t, *runs, 1)
-		assert.True(t, (*runs)[0].Succeeded)
-		assert.Equal(t, int64(len("dump")), (*runs)[0].SizeBytes)
-		assert.Equal(t, storedAt, (*runs)[0].StartedAt, "the dump is stored under the recorded start")
+			_, err := runBackupToEnd(t, svc, "shop", "api", "orders")
+			require.NoError(t, err)
+			require.Len(t, *runs, 1)
+			assert.True(t, (*runs)[0].Succeeded)
+			assert.Equal(t, int64(len("dump")), (*runs)[0].SizeBytes)
+			assert.Equal(t, storedAt, (*runs)[0].StartedAt, "the dump is stored under the recorded start")
+		})
 	})
 }
 

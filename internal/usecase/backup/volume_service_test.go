@@ -8,6 +8,7 @@ import (
 	"io"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"bnema.dev/zerowrap"
@@ -157,41 +158,42 @@ func TestVolumeService_TargetsResolveFromDeclarations(t *testing.T) {
 	assert.Equal(t, "/var/lib/data", targets[0].MountPath)
 }
 
-// TestVolumeService_RunVolumeBackups_ExportsTheDeclaredVolume proves the
+// TestVolumeService_StartVolumeBackup_ExportsTheDeclaredVolume proves the
 // archive export targets the runtime volume and the artifact is stored
 // under the app identity.
-func TestVolumeService_RunVolumeBackups_ExportsTheDeclaredVolume(t *testing.T) {
-	state := outmocks.NewMockAppStateReader(t)
-	state.EXPECT().LoadIntent(mock.Anything, "shop").Return(domain.AppStopIntent{App: "shop"}, nil).Once()
-	state.EXPECT().LoadActive(mock.Anything, "shop").Return(activeWith("shop", map[string]domain.AppService{
-		"api": volumeSpec("api", "data", "/var/lib/data"),
-	}, "ctr-api"), true, nil).Once()
+func TestVolumeService_StartVolumeBackup_ExportsTheDeclaredVolume(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		state := outmocks.NewMockAppStateReader(t)
+		state.EXPECT().LoadIntent(mock.Anything, "shop").Return(domain.AppStopIntent{App: "shop"}, nil).Once()
+		state.EXPECT().LoadActive(mock.Anything, "shop").Return(activeWith("shop", map[string]domain.AppService{
+			"api": volumeSpec("api", "data", "/var/lib/data"),
+		}, "ctr-api"), true, nil).Once()
 
-	exporter := &fakeVolumeArchiveExporter{}
-	storage := &fakeVolumeBackupStorage{}
-	svc := volumeTestService(t, state, exporter, storage, true)
+		exporter := &fakeVolumeArchiveExporter{}
+		storage := &fakeVolumeBackupStorage{}
+		svc := volumeTestService(t, state, exporter, storage, true)
 
-	job, err := runVolumeBackupToEnd(t, svc, "shop", "api", "data")
-	require.NoError(t, err)
-	jobs := []domain.VolumeBackupJob{job}
-	assert.Equal(t, domain.BackupStatusCompleted, jobs[0].Status)
-	assert.Equal(t, "shop", jobs[0].App)
-	assert.Equal(t, "api", jobs[0].Service)
-	assert.Equal(t, "data", jobs[0].VolumeName)
-	assert.Equal(t, int64(len("archive")), jobs[0].SizeBytes)
+		job, err := runVolumeBackupToEnd(t, svc, "shop", "api", "data")
+		require.NoError(t, err)
+		assert.Equal(t, domain.BackupStatusCompleted, job.Status)
+		assert.Equal(t, "shop", job.App)
+		assert.Equal(t, "api", job.Service)
+		assert.Equal(t, "data", job.VolumeName)
+		assert.Equal(t, int64(len("archive")), job.SizeBytes)
 
-	require.Len(t, exporter.requested, 1)
-	assert.Equal(t, domain.RuntimeVolumeName("shop", "api", "data"), exporter.requested[0].VolumeName)
-	assert.Equal(t, "/var/lib/data", exporter.requested[0].MountPath)
-	require.Len(t, storage.stored, 1)
-	assert.Equal(t, "shop", storage.stored[0].App)
-	assert.Equal(t, []string{"shop"}, storage.retention)
-	assert.Contains(t, jobs[0].ArtifactRef, "shop")
+		require.Len(t, exporter.requested, 1)
+		assert.Equal(t, domain.RuntimeVolumeName("shop", "api", "data"), exporter.requested[0].VolumeName)
+		assert.Equal(t, "/var/lib/data", exporter.requested[0].MountPath)
+		require.Len(t, storage.stored, 1)
+		assert.Equal(t, "shop", storage.stored[0].App)
+		assert.Equal(t, []string{"shop"}, storage.retention)
+		assert.Contains(t, job.ArtifactRef, "shop")
+	})
 }
 
-// TestVolumeService_RunVolumeBackups_SelectorRules proves the explicit
+// TestVolumeService_StartVolumeBackup_SelectorRules proves the explicit
 // selector rules for volume backups too.
-func TestVolumeService_RunVolumeBackups_SelectorRules(t *testing.T) {
+func TestVolumeService_StartVolumeBackup_SelectorRules(t *testing.T) {
 	ctx := context.Background()
 	state := outmocks.NewMockAppStateReader(t)
 	state.EXPECT().LoadIntent(mock.Anything, "shop").Return(domain.AppStopIntent{App: "shop"}, nil)
@@ -309,78 +311,84 @@ func TestVolumeService_ListVolumeBackupsWrapsStorageError(t *testing.T) {
 // TestVolumeService_FailedExportReportsTheJob proves a failed export keeps
 // a failed job with its error and stores nothing.
 func TestVolumeService_FailedExportReportsTheJob(t *testing.T) {
-	state := outmocks.NewMockAppStateReader(t)
-	state.EXPECT().LoadIntent(mock.Anything, "shop").Return(domain.AppStopIntent{App: "shop"}, nil).Once()
-	state.EXPECT().LoadActive(mock.Anything, "shop").Return(activeWith("shop", map[string]domain.AppService{
-		"api": volumeSpec("api", "data", "/data"),
-	}, "ctr-api"), true, nil).Once()
+	synctest.Test(t, func(t *testing.T) {
+		state := outmocks.NewMockAppStateReader(t)
+		state.EXPECT().LoadIntent(mock.Anything, "shop").Return(domain.AppStopIntent{App: "shop"}, nil).Once()
+		state.EXPECT().LoadActive(mock.Anything, "shop").Return(activeWith("shop", map[string]domain.AppService{
+			"api": volumeSpec("api", "data", "/data"),
+		}, "ctr-api"), true, nil).Once()
 
-	storage := &fakeVolumeBackupStorage{}
-	svc := volumeTestService(t, state, &fakeVolumeArchiveExporter{err: errors.New("helper failed")}, storage, true)
+		storage := &fakeVolumeBackupStorage{}
+		svc := volumeTestService(t, state, &fakeVolumeArchiveExporter{err: errors.New("helper failed")}, storage, true)
 
-	job, err := runVolumeBackupToEnd(t, svc, "shop", "api", "data")
-	require.Error(t, err)
-	assert.Equal(t, domain.BackupStatusFailed, job.Status)
-	assert.Contains(t, job.Error, "helper failed")
-	assert.Empty(t, storage.stored)
+		job, err := runVolumeBackupToEnd(t, svc, "shop", "api", "data")
+		require.Error(t, err)
+		assert.Equal(t, domain.BackupStatusFailed, job.Status)
+		assert.Contains(t, job.Error, "helper failed")
+		assert.Empty(t, storage.stored)
+	})
 }
 
 // TestVolumeService_StartVolumeBackup_OutlivesTheCaller is the regression
 // for a manual backup aborted when its HTTP client disconnected: the
 // caller's context is cancelled mid-export and the archive still uploads.
 func TestVolumeService_StartVolumeBackup_OutlivesTheCaller(t *testing.T) {
-	state := outmocks.NewMockAppStateReader(t)
-	expectShopVolume(state)
-	hold := make(chan struct{})
-	exporter := &fakeVolumeArchiveExporter{hold: hold}
-	storage := &fakeVolumeBackupStorage{}
-	svc := volumeTestService(t, state, exporter, storage, true)
+	synctest.Test(t, func(t *testing.T) {
+		state := outmocks.NewMockAppStateReader(t)
+		expectShopVolume(state)
+		hold := make(chan struct{})
+		exporter := &fakeVolumeArchiveExporter{hold: hold}
+		storage := &fakeVolumeBackupStorage{}
+		svc := volumeTestService(t, state, exporter, storage, true)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	job, err := svc.StartVolumeBackup(ctx, "shop", "api", "data")
-	require.NoError(t, err)
-	assert.Equal(t, domain.BackupStatusRunning, job.Status)
-	require.NotEmpty(t, job.ID)
+		ctx, cancel := context.WithCancel(context.Background())
+		job, err := svc.StartVolumeBackup(ctx, "shop", "api", "data")
+		require.NoError(t, err)
+		assert.Equal(t, domain.BackupStatusRunning, job.Status)
+		require.NotEmpty(t, job.ID)
 
-	status, err := svc.VolumeBackupStatus(context.Background())
-	require.NoError(t, err)
-	require.Len(t, status, 1)
-	assert.Equal(t, job.ID, status[0].ID)
-	assert.Equal(t, domain.BackupStatusRunning, status[0].Status)
+		status, err := svc.VolumeBackupStatus(context.Background())
+		require.NoError(t, err)
+		require.Len(t, status, 1)
+		assert.Equal(t, job.ID, status[0].ID)
+		assert.Equal(t, domain.BackupStatusRunning, status[0].Status)
 
-	cancel()
-	close(hold)
+		cancel()
+		close(hold)
 
-	done := awaitRun(t, svc.VolumeBackupRun, job.ID, func(j domain.VolumeBackupJob) domain.BackupJobStatus { return j.Status })
-	assert.Equal(t, domain.BackupStatusCompleted, done.Status, done.Error)
-	storage.mu.Lock()
-	defer storage.mu.Unlock()
-	assert.Len(t, storage.stored, 1)
-	assert.Equal(t, []string{"shop"}, storage.retention)
+		done := awaitRun(t, svc.VolumeBackupRun, job.ID, func(j domain.VolumeBackupJob) domain.BackupJobStatus { return j.Status })
+		assert.Equal(t, domain.BackupStatusCompleted, done.Status, done.Error)
+		storage.mu.Lock()
+		defer storage.mu.Unlock()
+		assert.Len(t, storage.stored, 1)
+		assert.Equal(t, []string{"shop"}, storage.retention)
+	})
 }
 
 // TestVolumeService_StartVolumeBackup_ReusesTheRunningJob proves a second
 // start while the target is being backed up returns the same run instead
 // of starting a second upload.
 func TestVolumeService_StartVolumeBackup_ReusesTheRunningJob(t *testing.T) {
-	state := outmocks.NewMockAppStateReader(t)
-	expectShopVolume(state)
-	expectShopVolume(state)
-	hold := make(chan struct{})
-	exporter := &fakeVolumeArchiveExporter{hold: hold}
-	svc := volumeTestService(t, state, exporter, &fakeVolumeBackupStorage{}, true)
+	synctest.Test(t, func(t *testing.T) {
+		state := outmocks.NewMockAppStateReader(t)
+		expectShopVolume(state)
+		expectShopVolume(state)
+		hold := make(chan struct{})
+		exporter := &fakeVolumeArchiveExporter{hold: hold}
+		svc := volumeTestService(t, state, exporter, &fakeVolumeBackupStorage{}, true)
 
-	first, err := svc.StartVolumeBackup(context.Background(), "shop", "api", "data")
-	require.NoError(t, err)
-	second, err := svc.StartVolumeBackup(context.Background(), "shop", "api", "data")
-	require.NoError(t, err)
-	assert.Equal(t, first.ID, second.ID)
+		first, err := svc.StartVolumeBackup(context.Background(), "shop", "api", "data")
+		require.NoError(t, err)
+		second, err := svc.StartVolumeBackup(context.Background(), "shop", "api", "data")
+		require.NoError(t, err)
+		assert.Equal(t, first.ID, second.ID)
 
-	close(hold)
-	awaitRun(t, svc.VolumeBackupRun, first.ID, func(j domain.VolumeBackupJob) domain.BackupJobStatus { return j.Status })
-	exporter.mu.Lock()
-	defer exporter.mu.Unlock()
-	assert.Len(t, exporter.requested, 1)
+		close(hold)
+		awaitRun(t, svc.VolumeBackupRun, first.ID, func(j domain.VolumeBackupJob) domain.BackupJobStatus { return j.Status })
+		exporter.mu.Lock()
+		defer exporter.mu.Unlock()
+		assert.Len(t, exporter.requested, 1)
+	})
 }
 
 // TestVolumeService_VolumeBackupRun_UnknownID proves an unknown run is
@@ -389,4 +397,54 @@ func TestVolumeService_VolumeBackupRun_UnknownID(t *testing.T) {
 	svc := volumeTestService(t, outmocks.NewMockAppStateReader(t), &fakeVolumeArchiveExporter{}, &fakeVolumeBackupStorage{}, true)
 	_, err := svc.VolumeBackupRun(context.Background(), "nope")
 	require.ErrorIs(t, err, domain.ErrBackupRunNotFound)
+}
+
+// TestVolumeService_ScheduledRunSkipsATargetBeingBackedUp proves a
+// scheduled pass never starts a second archive of a volume whose manual
+// backup is still running.
+func TestVolumeService_ScheduledRunSkipsATargetBeingBackedUp(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		state := outmocks.NewMockAppStateReader(t)
+		expectShopVolume(state)
+		state.EXPECT().ListApps(mock.Anything).Return([]string{"shop"}, nil).Once()
+		expectShopVolume(state)
+		hold := make(chan struct{})
+		exporter := &fakeVolumeArchiveExporter{hold: hold}
+		storage := &fakeVolumeBackupStorage{}
+		svc := volumeTestService(t, state, exporter, storage, true)
+
+		manual, err := svc.StartVolumeBackup(context.Background(), "shop", "api", "data")
+		require.NoError(t, err)
+		require.NoError(t, svc.RunVolumeBackupsForSchedule(context.Background(), domain.ScheduleDaily))
+
+		close(hold)
+		done := awaitRun(t, svc.VolumeBackupRun, manual.ID, func(j domain.VolumeBackupJob) domain.BackupJobStatus { return j.Status })
+		assert.Equal(t, domain.BackupStatusCompleted, done.Status)
+		assert.Len(t, exporter.requested, 1)
+	})
+}
+
+// panicExporter panics on export, as a broken adapter would.
+type panicExporter struct{}
+
+func (panicExporter) ExportVolumeArchive(context.Context, domain.VolumeArchiveRequest) (*domain.VolumeArchiveResult, error) {
+	panic("adapter bug")
+}
+
+// TestVolumeService_DetachedPanicFailsTheRun proves a panic in a detached
+// manual run fails that run instead of crashing the server.
+func TestVolumeService_DetachedPanicFailsTheRun(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		state := outmocks.NewMockAppStateReader(t)
+		expectShopVolume(state)
+		svc := NewVolumeService(panicExporter{}, &fakeVolumeBackupStorage{}, domain.VolumeBackupConfig{
+			Enabled: true, Compression: domain.VolumeBackupCompressionGzip, Timeout: time.Minute,
+		}, testLogger()).WithAppState(state)
+
+		job, err := svc.StartVolumeBackup(context.Background(), "shop", "api", "data")
+		require.NoError(t, err)
+		done := awaitRun(t, svc.VolumeBackupRun, job.ID, func(j domain.VolumeBackupJob) domain.BackupJobStatus { return j.Status })
+		assert.Equal(t, domain.BackupStatusFailed, done.Status)
+		assert.Contains(t, done.Error, "panic: adapter bug")
+	})
 }

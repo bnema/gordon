@@ -89,7 +89,13 @@ losing the network never aborts it. Starting a target that is already being
 backed up returns the running job instead of starting a second backup.
 
 `--wait` follows the run until it completes or fails, and exits non-zero when
-the backup fails. Stopping the wait (Ctrl+C) stops only the wait.
+the backup fails. Stopping the wait (Ctrl+C) stops only the wait. A short
+network drop is retried; after repeated poll failures the command exits with
+the run ID while the backup continues on the server.
+
+A scheduled pass skips a target whose backup is still running. A retention
+failure after a manual volume backup is logged on the server; the run still
+reports the stored archive as completed.
 
 | Flag | Description |
 |------|-------------|
@@ -146,6 +152,8 @@ gordon backups volume list --json
       "app": "shop",
       "service": "api",
       "volume": "data",
+      "runtime_volume": "gordon-shop--api--vol--data",
+      "mount_path": "/var/lib/data",
       "compression": "gzip",
       "type": "volume_archive",
       "status": "running",
@@ -159,7 +167,8 @@ gordon backups volume list --json
 ## Required Permissions
 
 - Read operations (`list`, `status`) require `admin:status:read`.
-- `run` requires `admin:config:write`.
+- `run` requires `admin:config:write`; `run --wait` also requires
+  `admin:status:read`.
 
 ## Related
 

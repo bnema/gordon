@@ -4,27 +4,26 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
+	"testing/synctest"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/domain"
 )
 
-// awaitRun polls get until the run with id is no longer running.
+// awaitRun waits for the detached run to finish, then returns it. It must
+// run inside a synctest bubble, so the run's goroutine belongs to it.
 func awaitRun[J any](t *testing.T, get func(context.Context, string) (J, error), id string, status func(J) domain.BackupJobStatus) J {
 	t.Helper()
-	var job J
-	require.Eventually(t, func() bool {
-		var err error
-		job, err = get(context.Background(), id)
-		require.NoError(t, err)
-		return status(job) != domain.BackupStatusRunning
-	}, 5*time.Second, time.Millisecond)
+	synctest.Wait()
+	job, err := get(context.Background(), id)
+	require.NoError(t, err)
+	require.NotEqual(t, domain.BackupStatusRunning, status(job), "the detached run must have finished")
 	return job
 }
 
-// runBackupToEnd starts one database backup and waits for its outcome.
+// runBackupToEnd starts one database backup and waits for its outcome
+// inside the caller's synctest bubble.
 func runBackupToEnd(t *testing.T, svc *Service, app, service, database string) (domain.BackupJob, error) {
 	t.Helper()
 	job, err := svc.StartBackup(context.Background(), app, service, database)
@@ -38,7 +37,8 @@ func runBackupToEnd(t *testing.T, svc *Service, app, service, database string) (
 	return job, nil
 }
 
-// runVolumeBackupToEnd starts one volume backup and waits for its outcome.
+// runVolumeBackupToEnd starts one volume backup and waits for its outcome
+// inside the caller's synctest bubble.
 func runVolumeBackupToEnd(t *testing.T, svc *VolumeService, app, service, volume string) (domain.VolumeBackupJob, error) {
 	t.Helper()
 	job, err := svc.StartVolumeBackup(context.Background(), app, service, volume)

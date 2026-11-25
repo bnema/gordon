@@ -156,7 +156,7 @@ func runBackupRun(ctx context.Context, plane ControlPlane, app, service, databas
 	}
 	job := *result.Backup
 	if wait {
-		job, err = waitForBackupRun(ctx, job,
+		job, err = waitForBackupRun(ctx, job.ID, job,
 			func(j dto.BackupJob) string { return j.Status },
 			func(ctx context.Context) (dto.BackupJob, error) {
 				next, err := plane.GetBackupRun(ctx, app, job.ID)
@@ -188,7 +188,7 @@ func printBackupRun(out io.Writer, job dto.BackupJob, jsonOut bool) error {
 	if backupRunSettled(job.Status) {
 		return nil
 	}
-	return cliWriteLine(out, cliRenderMuted("Backup started on the server. Follow it with: gordon backups status"))
+	return cliWriteLine(out, cliRenderMuted("Backup running on the server. Follow it with: gordon backups status (or run again with --wait)"))
 }
 
 func newBackupStatusCmd() *cobra.Command {
@@ -289,12 +289,16 @@ func runVolumeBackupRun(ctx context.Context, plane ControlPlane, app, service, v
 	if err != nil {
 		return fmt.Errorf("failed to start volume backup: %w", err)
 	}
-	if len(result.Backups) != 1 {
+	switch len(result.Backups) {
+	case 0:
+		return fmt.Errorf("no volume backup started: volume backups are disabled on the server")
+	case 1:
+	default:
 		return fmt.Errorf("volume backup start returned %d jobs, expected 1", len(result.Backups))
 	}
 	job := result.Backups[0]
 	if wait {
-		job, err = waitForBackupRun(ctx, job,
+		job, err = waitForBackupRun(ctx, job.ID, job,
 			func(j dto.VolumeBackupJob) string { return j.Status },
 			func(ctx context.Context) (dto.VolumeBackupJob, error) {
 				next, err := plane.GetVolumeBackupRun(ctx, app, job.ID)
@@ -326,7 +330,7 @@ func printVolumeBackupRun(out io.Writer, job dto.VolumeBackupJob, jsonOut bool) 
 	if backupRunSettled(job.Status) {
 		return nil
 	}
-	return cliWriteLine(out, cliRenderMuted("Volume backup started on the server. Follow it with: gordon backups volume status"))
+	return cliWriteLine(out, cliRenderMuted("Volume backup running on the server. Follow it with: gordon backups volume status (or run again with --wait)"))
 }
 
 func newVolumeBackupStatusCmd() *cobra.Command {

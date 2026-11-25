@@ -80,6 +80,7 @@ func TestLocalAuthorityCanonicalAllowlist(t *testing.T) {
 		{http.MethodPost, "/backups/volumes/blog.example.com"},
 		{http.MethodGet, "/backups/shop/runs/b1"},
 		{http.MethodGet, "/backups/volumes/shop/runs/v1"},
+		{http.MethodGet, "/backups/runs/runs/b1"},
 		{http.MethodGet, "/apps"},
 		{http.MethodPost, "/apps/apply"},
 		{http.MethodGet, "/apps/blog"},
@@ -125,6 +126,9 @@ func TestLocalAuthorityDeniesNearMissesAndNonCanonicalPaths(t *testing.T) {
 		{http.MethodGet, "/backups/shop/runs"},
 		{http.MethodPost, "/backups/volumes/shop/runs/v1"},
 		{http.MethodGet, "/backups/volumes/shop/runs/v1/extra"},
+		{http.MethodGet, "/backups/volumes/runs/v1"},
+		{http.MethodGet, "/backups/status/runs/b1"},
+		{http.MethodGet, "/backups/shop//b1"},
 		{http.MethodGet, "/apps/blog/operations/by-key/key/extra"},
 		{http.MethodGet, "/"},
 	}

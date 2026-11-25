@@ -145,6 +145,12 @@ func (s *Service) allTargets(ctx context.Context) ([]domain.DatabaseTarget, erro
 // outcome. When the target already has a running backup, that run is
 // returned instead of starting a second one.
 func (s *Service) StartBackup(ctx context.Context, app, service, database string) (domain.BackupJob, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "StartBackup",
+		"app":                 app,
+	})
+	log := zerowrap.FromCtx(ctx)
 	targets, err := s.Targets(ctx, app)
 	if err != nil {
 		return domain.BackupJob{}, err
@@ -158,17 +164,44 @@ func (s *Service) StartBackup(ctx context.Context, app, service, database string
 	}
 	job, started := s.runs.begin(newBackupJob(target, ""))
 	if !started {
-		s.log.Info().Str("app", job.App).Str("service", job.Service).Str("database", job.DBName).
+		log.Info().Str("service", job.Service).Str("database", job.DBName).
 			Str("job_id", job.ID).Msg("database backup already running")
 		return job, nil
 	}
-	go func(ctx context.Context) {
-		if _, err := s.runJob(ctx, target, job); err != nil {
-			s.log.Error().Err(err).Str("app", job.App).Str("service", job.Service).
-				Str("database", job.DBName).Str("job_id", job.ID).Msg("manual backup failed")
-		}
-	}(context.WithoutCancel(ctx))
+	go s.finishBackup(context.WithoutCancel(ctx), target, job)
 	return job, nil
+}
+
+// finishBackup runs one started manual database backup to its end and
+// records the outcome in the run registry.
+func (s *Service) finishBackup(ctx context.Context, target domain.DatabaseTarget, job domain.BackupJob) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		"service":  job.Service,
+		"database": job.DBName,
+		"job_id":   job.ID,
+	})
+	defer s.failOnPanic(ctx, job)
+	job, err := s.runJob(ctx, target, job)
+	s.runs.put(job)
+	if err != nil {
+		log := zerowrap.FromCtx(ctx)
+		log.Error().Err(err).Msg("manual backup failed")
+	}
+}
+
+// failOnPanic records a panic in a detached run as a failed run instead of
+// crashing the server. It must be deferred.
+func (s *Service) failOnPanic(ctx context.Context, job domain.BackupJob) {
+	recovered := recover()
+	if recovered == nil {
+		return
+	}
+	job.Status = domain.BackupStatusFailed
+	job.CompletedAt = time.Now().UTC()
+	job.Error = fmt.Sprintf("panic: %v", recovered)
+	s.runs.put(job)
+	log := zerowrap.FromCtx(ctx)
+	log.Error().Str("panic", job.Error).Msg("manual backup panicked")
 }
 
 // BackupRun returns one tracked database backup run by ID.
@@ -204,7 +237,16 @@ func (s *Service) RunForSchedule(ctx context.Context, schedule domain.BackupSche
 				Str("database", target.Database).Msg("scheduled backup skipped: no active container")
 			continue
 		}
-		if _, err := s.runJob(ctx, target, newBackupJob(target, schedule)); err != nil {
+		job, started := s.runs.begin(newBackupJob(target, schedule))
+		if !started {
+			s.log.Warn().Str("app", target.App).Str("service", target.Service).
+				Str("database", target.Database).Str("job_id", job.ID).
+				Msg("scheduled backup skipped: a backup of this database is already running")
+			continue
+		}
+		job, err := s.runJob(ctx, target, job)
+		s.runs.put(job)
+		if err != nil {
 			s.log.Error().Err(err).Str("app", target.App).Str("service", target.Service).
 				Str("database", target.Database).Msg("scheduled backup failed")
 			if firstErr == nil {
@@ -270,7 +312,7 @@ func (s *Service) Status(ctx context.Context) ([]domain.BackupJob, error) {
 		return nil, err
 	}
 	for _, target := range targets {
-		if _, ok := completed[databaseRunMeta(domain.BackupJob{App: target.App, Service: target.Service, DBName: target.Database}).target]; ok {
+		if _, ok := completed[databaseTargetID(target.App, target.Service, target.Database)]; ok {
 			continue
 		}
 		jobs = append(jobs, domain.BackupJob{
@@ -308,50 +350,48 @@ func newBackupJob(target domain.DatabaseTarget, schedule domain.BackupSchedule) 
 	}
 }
 
+// databaseTargetID is the registry identity of one database target.
+func databaseTargetID(app, service, database string) string {
+	return app + "\x00" + service + "\x00" + database
+}
+
 // databaseRunMeta identifies one database backup run for the run registry.
 func databaseRunMeta(job domain.BackupJob) runMeta {
 	return runMeta{
-		target: job.App + "\x00" + job.Service + "\x00" + job.DBName,
+		target: databaseTargetID(job.App, job.Service, job.DBName),
 		id:     job.ID,
 		status: job.Status,
 	}
 }
 
 // runJob runs one declared database backup through the service container
-// that hosts it, and records the outcome in the run registry and metrics.
-func (s *Service) runJob(ctx context.Context, target domain.DatabaseTarget, job domain.BackupJob) (*domain.BackupResult, error) {
-	s.runs.put(job)
-	result, err := s.dumpTarget(ctx, target, job)
+// that hosts it, records the outcome in metrics, and returns the settled
+// job. The caller records it in the run registry once its own follow-up
+// work is done, so a poller never sees a run settle early.
+func (s *Service) runJob(ctx context.Context, target domain.DatabaseTarget, job domain.BackupJob) (domain.BackupJob, error) {
+	done, err := s.dumpTarget(ctx, target, job)
+	if err != nil {
+		done = job
+		done.Status = domain.BackupStatusFailed
+		done.CompletedAt = time.Now().UTC()
+		done.Error = err.Error()
+	}
 	if s.metrics != nil {
-		run := domain.BackupRunRecord{
+		s.metrics.RecordBackupRun(ctx, domain.BackupRunRecord{
 			BackupTargetRef: databaseTargetRef(target),
 			Succeeded:       err == nil,
 			Duration:        time.Since(job.StartedAt),
+			SizeBytes:       done.SizeBytes,
 			StartedAt:       job.StartedAt,
-		}
-		if result != nil {
-			run.SizeBytes = result.Job.SizeBytes
-		}
-		s.metrics.RecordBackupRun(ctx, run)
+		})
 	}
-	// The final state is recorded last, so a poller never sees a run
-	// settle before its metrics are written.
-	if err != nil {
-		job.Status = domain.BackupStatusFailed
-		job.CompletedAt = time.Now().UTC()
-		job.Error = err.Error()
-		s.runs.put(job)
-	} else {
-		s.runs.put(result.Job)
-	}
-	return result, err
+	return done, err
 }
 
-func (s *Service) dumpTarget(ctx context.Context, target domain.DatabaseTarget, job domain.BackupJob) (*domain.BackupResult, error) {
-	if target.ContainerID == "" {
-		return nil, fmt.Errorf("backup: app %q service %q has no active container", target.App, target.Service)
-	}
-
+// dumpTarget dumps one database inside its container and uploads the
+// dump. pg_dump and the transfer each get their own deadline: a detached
+// manual run has no caller left to cancel them.
+func (s *Service) dumpTarget(ctx context.Context, target domain.DatabaseTarget, job domain.BackupJob) (domain.BackupJob, error) {
 	execCtx, cancelExec := context.WithTimeout(ctx, backupExecTimeout)
 	defer cancelExec()
 	dumpPath := fmt.Sprintf("/tmp/gordon-backup-%d.bak", job.StartedAt.UnixNano())
@@ -360,45 +400,40 @@ func (s *Service) dumpTarget(ctx context.Context, target domain.DatabaseTarget, 
 	execResult, err := s.runtime.ExecInContainer(execCtx, target.ContainerID, []string{"sh", "-c", pgDumpToPathCommand(dumpPath, target.Database)})
 	if err != nil {
 		if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("pg_dump timed out after %s", backupExecTimeout)
+			return job, fmt.Errorf("pg_dump timed out after %s: %w", backupExecTimeout, err)
 		}
-		return nil, err
+		return job, err
 	}
 	if execResult.ExitCode != 0 {
-		return nil, fmt.Errorf("pg_dump failed with exit code %d: %s", execResult.ExitCode, string(execResult.Stderr))
+		return job, fmt.Errorf("pg_dump failed with exit code %d: %s", execResult.ExitCode, string(execResult.Stderr))
 	}
 
-	dumpStream, err := s.runtime.CopyFromContainer(execCtx, target.ContainerID, dumpPath)
+	// The copy stream is read by the upload, so both share one deadline.
+	transferCtx, cancelTransfer := context.WithTimeout(ctx, backupExecTimeout)
+	defer cancelTransfer()
+	dumpStream, err := s.runtime.CopyFromContainer(transferCtx, target.ContainerID, dumpPath)
 	if err != nil {
-		if errors.Is(execCtx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("backup copy timed out after %s", backupExecTimeout)
+		if errors.Is(transferCtx.Err(), context.DeadlineExceeded) {
+			return job, fmt.Errorf("backup copy timed out after %s: %w", backupExecTimeout, err)
 		}
-		return nil, err
+		return job, err
 	}
 	defer dumpStream.Close()
 
-	// The upload gets its own deadline: a detached manual run has no
-	// caller left to cancel it.
-	storeCtx, cancelStore := context.WithTimeout(ctx, backupExecTimeout)
-	defer cancelStore()
 	counter := &byteCounter{}
-	path, err := s.storage.Store(storeCtx, target.App, target.Service, target.Database, job.Schedule, job.StartedAt, io.TeeReader(dumpStream, counter))
+	path, err := s.storage.Store(transferCtx, target.App, target.Service, target.Database, job.Schedule, job.StartedAt, io.TeeReader(dumpStream, counter))
 	if err != nil {
-		if errors.Is(storeCtx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("backup upload timed out after %s", backupExecTimeout)
+		if errors.Is(transferCtx.Err(), context.DeadlineExceeded) {
+			return job, fmt.Errorf("backup upload timed out after %s: %w", backupExecTimeout, err)
 		}
-		return nil, err
+		return job, err
 	}
 
 	job.Status = domain.BackupStatusCompleted
 	job.CompletedAt = time.Now().UTC()
 	job.SizeBytes = counter.n
 	job.FilePath = path
-
-	return &domain.BackupResult{
-		Job:      job,
-		Duration: time.Since(job.StartedAt),
-	}, nil
+	return job, nil
 }
 
 // databaseTargetKey reports the (service, database) identity of one

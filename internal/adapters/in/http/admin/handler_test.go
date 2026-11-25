@@ -786,6 +786,27 @@ func TestHandler_VolumeBackupRun(t *testing.T) {
 	}
 }
 
+func TestHandler_BackupRunRoutesRequireScopes(t *testing.T) {
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.BackupSvc = inmocks.NewMockBackupService(t)
+		d.VolumeBackupSvc = inmocks.NewMockVolumeBackupService(t)
+	})
+	for _, tc := range []struct{ method, path, scope string }{
+		{"GET", "/admin/backups/shop/runs/b1", "admin:config:write"},
+		{"GET", "/admin/backups/volumes/shop/runs/v1", "admin:config:write"},
+		{"POST", "/admin/backups/shop", "admin:status:read"},
+		{"POST", "/admin/backups/volumes/shop", "admin:status:read"},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, bytes.NewBufferString(`{}`))
+			req = req.WithContext(ctxWithScopes(tc.scope))
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			assert.Equal(t, http.StatusForbidden, rec.Code)
+		})
+	}
+}
+
 func TestHandler_BackupRun(t *testing.T) {
 	backupSvc := inmocks.NewMockBackupService(t)
 	backupSvc.EXPECT().BackupRun(mock.Anything, "b1").Return(domain.BackupJob{ID: "b1", App: "shop", Status: domain.BackupStatusFailed, Error: "boom"}, nil)

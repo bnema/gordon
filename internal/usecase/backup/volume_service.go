@@ -196,19 +196,42 @@ func (s *VolumeService) StartVolumeBackup(ctx context.Context, app, service, vol
 	return job, nil
 }
 
+// volumeRetentionTimeout bounds retention after a manual run, so a stuck
+// storage call never leaves the run reported as running.
+const volumeRetentionTimeout = 5 * time.Minute
+
 // finishVolumeBackup runs one started manual volume backup to its end,
 // then applies retention to the app. Its outcome is recorded in the run
-// registry; a retention error is logged because no caller waits for it.
+// registry; a retention error is logged, as for scheduled runs, because
+// the archive itself is stored.
 func (s *VolumeService) finishVolumeBackup(ctx context.Context, target domain.VolumeBackupTarget, job domain.VolumeBackupJob) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{"job_id": job.ID})
+	defer s.failOnPanic(ctx, job)
 	job = s.runVolumeBackup(ctx, target, job)
-	defer s.runs.put(job)
-	if job.Status != domain.BackupStatusCompleted {
+	if job.Status == domain.BackupStatusCompleted {
+		retentionCtx, cancel := context.WithTimeout(ctx, volumeRetentionTimeout)
+		if _, err := s.storage.ApplyVolumeRetention(retentionCtx, job.App, s.config.Retention); err != nil {
+			log := zerowrap.FromCtx(ctx)
+			log.Error().Err(err).Msg("volume backup retention failed")
+		}
+		cancel()
+	}
+	s.runs.put(job)
+}
+
+// failOnPanic records a panic in a detached run as a failed run instead of
+// crashing the server. It must be deferred.
+func (s *VolumeService) failOnPanic(ctx context.Context, job domain.VolumeBackupJob) {
+	recovered := recover()
+	if recovered == nil {
 		return
 	}
-	if _, err := s.storage.ApplyVolumeRetention(ctx, job.App, s.config.Retention); err != nil {
-		log := zerowrap.FromCtx(ctx)
-		log.Error().Err(err).Str("job_id", job.ID).Msg("volume backup retention failed")
-	}
+	job.Status = domain.BackupStatusFailed
+	job.CompletedAt = time.Now().UTC()
+	job.Error = fmt.Sprintf("panic: %v", recovered)
+	s.runs.put(job)
+	log := zerowrap.FromCtx(ctx)
+	log.Error().Str("panic", job.Error).Msg("manual volume backup panicked")
 }
 
 // VolumeBackupRun returns one tracked volume backup run by ID.
@@ -260,29 +283,43 @@ func (s *VolumeService) RunVolumeBackupsForSchedule(ctx context.Context, schedul
 }
 
 // runVolumeBackupsConcurrently runs every target with at most
-// MaxConcurrency exports in flight and returns the jobs in target order.
+// MaxConcurrency exports in flight and returns the jobs that ran, in
+// target order. A target that is already being backed up is skipped.
 func (s *VolumeService) runVolumeBackupsConcurrently(ctx context.Context, targets []domain.VolumeBackupTarget) []domain.VolumeBackupJob {
 	limit := s.config.MaxConcurrency
 	if limit < 1 {
 		limit = 1
 	}
 	jobs := make([]domain.VolumeBackupJob, len(targets))
+	ran := make([]bool, len(targets))
 	sem := make(chan struct{}, limit)
 	var wg sync.WaitGroup
 	for i, target := range targets {
+		job, started := s.runs.begin(s.newVolumeJob(target))
+		if !started {
+			s.log.Warn().Str("app", target.App).Str("service", target.Service).
+				Str("volume", target.VolumeName).Str("job_id", job.ID).
+				Msg("scheduled volume backup skipped: a backup of this volume is already running")
+			continue
+		}
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(i int, target domain.VolumeBackupTarget) {
+		go func(i int, target domain.VolumeBackupTarget, job domain.VolumeBackupJob) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			job := s.newVolumeJob(target)
-			s.runs.put(job)
 			jobs[i] = s.runVolumeBackup(ctx, target, job)
+			ran[i] = true
 			s.runs.put(jobs[i])
-		}(i, target)
+		}(i, target, job)
 	}
 	wg.Wait()
-	return jobs
+	done := make([]domain.VolumeBackupJob, 0, len(targets))
+	for i, job := range jobs {
+		if ran[i] {
+			done = append(done, job)
+		}
+	}
+	return done
 }
 
 // runVolumeBackup archives one target and records the outcome in metrics.
@@ -378,10 +415,15 @@ func newVolumeBackupJobID() string {
 	return hex.EncodeToString(random)
 }
 
+// volumeTargetID is the registry identity of one volume target.
+func volumeTargetID(app, service, volume string) string {
+	return app + "\x00" + service + "\x00" + volume
+}
+
 // volumeRunMeta identifies one volume backup run for the run registry.
 func volumeRunMeta(job domain.VolumeBackupJob) runMeta {
 	return runMeta{
-		target: job.App + "\x00" + job.Service + "\x00" + job.VolumeName,
+		target: volumeTargetID(job.App, job.Service, job.VolumeName),
 		id:     job.ID,
 		status: job.Status,
 	}

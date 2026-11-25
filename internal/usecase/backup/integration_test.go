@@ -124,11 +124,13 @@ func runPostgresBackupFlow(t *testing.T, ctx context.Context, runtime *docker.Ru
 
 	started, err := svc.StartBackup(ctx, appName, "postgres", "appdb")
 	require.NoError(t, err)
+	// Real Docker I/O: the detached run is polled, not simulated.
 	var job domain.BackupJob
-	require.Eventually(t, func() bool {
-		job, err = svc.BackupRun(ctx, started.ID)
-		require.NoError(t, err)
-		return job.Status != domain.BackupStatusRunning
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		var runErr error
+		job, runErr = svc.BackupRun(ctx, started.ID)
+		require.NoError(c, runErr)
+		assert.NotEqual(c, domain.BackupStatusRunning, job.Status)
 	}, 2*time.Minute, 100*time.Millisecond)
 	require.Equal(t, domain.BackupStatusCompleted, job.Status, job.Error)
 
