@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 	"testing/synctest"
 
@@ -12,6 +13,7 @@ import (
 
 	"github.com/bnema/gordon/internal/adapters/dto"
 	climocks "github.com/bnema/gordon/internal/adapters/in/cli/mocks"
+	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 )
 
 // backupRunPlane builds the control plane double the runner functions
@@ -134,13 +136,13 @@ func TestVolumeBackupRun_WaitGivesUpAfterRepeatedPollErrors(t *testing.T) {
 	})
 }
 
-func TestVolumeBackupRun_DisabledOnOlderServer(t *testing.T) {
+func TestVolumeBackupRun_NoJobReturned(t *testing.T) {
 	plane := backupRunPlane(t)
 	plane.EXPECT().StartVolumeBackup(mock.Anything, "shop", "", "").Return(&dto.VolumeBackupRunResponse{Status: "ok"}, nil)
 
 	var out bytes.Buffer
 	err := runVolumeBackupRun(context.Background(), plane, "shop", "", "", false, &out, false)
-	require.ErrorContains(t, err, "disabled")
+	require.ErrorContains(t, err, "returned no job")
 }
 
 func TestBackupRun_WaitPollsUntilCompleted(t *testing.T) {
@@ -182,5 +184,19 @@ func TestBackupRun_CancelBetweenPollsStopsOnlyTheWait(t *testing.T) {
 		err := runBackupRun(ctx, plane, "shop", "", "", true, &out, false)
 		require.ErrorIs(t, err, context.Canceled)
 		require.Contains(t, err.Error(), "backup run b1")
+	})
+}
+
+func TestBackupRun_WaitStopsWhenTheRunIsNoLongerTracked(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		plane := backupRunPlane(t)
+		plane.EXPECT().StartBackup(mock.Anything, "shop", "", "").Return(&dto.BackupRunResponse{
+			Status: "running", Backup: &dto.BackupJob{ID: "b1", App: "shop", Status: "running"},
+		}, nil)
+		plane.EXPECT().GetBackupRun(mock.Anything, "shop", "b1").Return(nil, &remote.HTTPError{StatusCode: http.StatusNotFound}).Once()
+
+		var out bytes.Buffer
+		err := runBackupRun(context.Background(), plane, "shop", "", "", true, &out, false)
+		require.ErrorContains(t, err, "no longer tracked")
 	})
 }

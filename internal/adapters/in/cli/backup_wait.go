@@ -2,9 +2,12 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
+	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -44,6 +47,9 @@ func waitForBackupRun[J any](ctx context.Context, id string, job J, status func(
 			if ctx.Err() != nil {
 				return job, fmt.Errorf("stopped waiting for backup run %s, it keeps running on the server: %w", id, ctx.Err())
 			}
+			if isNotFound(err) {
+				return job, fmt.Errorf("backup run %s is no longer tracked by the server (it may have restarted); check the status command: %w", id, err)
+			}
 			failures++
 			if failures < backupPollAttempts {
 				continue
@@ -54,4 +60,10 @@ func waitForBackupRun[J any](ctx context.Context, id string, job J, status func(
 		job = next
 	}
 	return job, nil
+}
+
+// isNotFound reports whether err is an HTTP 404 from the server.
+func isNotFound(err error) bool {
+	var httpErr *remote.HTTPError
+	return errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound
 }

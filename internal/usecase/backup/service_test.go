@@ -308,3 +308,52 @@ func TestService_StatusReportsTrackedRuns(t *testing.T) {
 		require.ErrorIs(t, err, domain.ErrBackupRunNotFound)
 	})
 }
+
+// TestService_ScheduledRunSkipsADatabaseBeingBackedUp proves a scheduled
+// pass never dumps a database whose manual backup is still running.
+func TestService_ScheduledRunSkipsADatabaseBeingBackedUp(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		state := outmocks.NewMockAppStateReader(t)
+		expectShopDatabase(state)
+		runtime, _, svc := backupTestService(t, state)
+		release := make(chan struct{})
+		runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.MatchedBy(func(cmd []string) bool {
+			return strings.Contains(cmd[2], "pg_dump")
+		})).RunAndReturn(func(context.Context, string, []string) (*out.ExecResult, error) {
+			<-release
+			return &out.ExecResult{ExitCode: 1}, nil
+		}).Once()
+		runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.Anything).Return(&out.ExecResult{ExitCode: 0}, nil).Once()
+
+		manual, err := svc.StartBackup(context.Background(), "shop", "api", "orders")
+		require.NoError(t, err)
+		state.EXPECT().ListApps(mock.Anything).Return([]string{"shop"}, nil).Once()
+		expectShopDatabase(state)
+		require.NoError(t, svc.RunForSchedule(context.Background(), domain.ScheduleDaily))
+
+		close(release)
+		done := awaitRun(t, svc.BackupRun, manual.ID, func(j domain.BackupJob) domain.BackupJobStatus { return j.Status })
+		assert.Equal(t, domain.BackupStatusFailed, done.Status)
+	})
+}
+
+// TestService_PanicFailsTheRun proves a panicking adapter fails the run
+// instead of leaving it running or crashing the server.
+func TestService_PanicFailsTheRun(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		state := outmocks.NewMockAppStateReader(t)
+		expectShopDatabase(state)
+		runtime, _, svc := backupTestService(t, state)
+		runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.MatchedBy(func(cmd []string) bool {
+			return strings.Contains(cmd[2], "pg_dump")
+		})).RunAndReturn(func(context.Context, string, []string) (*out.ExecResult, error) {
+			panic("adapter bug")
+		}).Once()
+		runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.Anything).Return(&out.ExecResult{ExitCode: 0}, nil).Once()
+
+		job, err := runBackupToEnd(t, svc, "shop", "api", "orders")
+		require.Error(t, err)
+		assert.Equal(t, domain.BackupStatusFailed, job.Status)
+		assert.Contains(t, job.Error, "panic: adapter bug")
+	})
+}

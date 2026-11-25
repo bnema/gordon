@@ -291,7 +291,7 @@ func runVolumeBackupRun(ctx context.Context, plane ControlPlane, app, service, v
 	}
 	switch len(result.Backups) {
 	case 0:
-		return fmt.Errorf("no volume backup started: volume backups are disabled on the server")
+		return fmt.Errorf("volume backup start returned no job (are volume backups enabled on the server?)")
 	case 1:
 	default:
 		return fmt.Errorf("volume backup start returned %d jobs, expected 1", len(result.Backups))

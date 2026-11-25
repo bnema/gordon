@@ -172,36 +172,34 @@ func (s *Service) StartBackup(ctx context.Context, app, service, database string
 	return job, nil
 }
 
-// finishBackup runs one started manual database backup to its end and
-// records the outcome in the run registry.
+// finishBackup runs one started manual database backup to its end.
 func (s *Service) finishBackup(ctx context.Context, target domain.DatabaseTarget, job domain.BackupJob) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		"service":  job.Service,
 		"database": job.DBName,
 		"job_id":   job.ID,
 	})
-	defer s.failOnPanic(ctx, job)
-	job, err := s.runJob(ctx, target, job)
-	s.runs.put(job)
-	if err != nil {
+	if _, err := s.runTracked(ctx, target, job); err != nil {
 		log := zerowrap.FromCtx(ctx)
 		log.Error().Err(err).Msg("manual backup failed")
 	}
 }
 
-// failOnPanic records a panic in a detached run as a failed run instead of
-// crashing the server. It must be deferred.
-func (s *Service) failOnPanic(ctx context.Context, job domain.BackupJob) {
-	recovered := recover()
-	if recovered == nil {
-		return
-	}
-	job.Status = domain.BackupStatusFailed
-	job.CompletedAt = time.Now().UTC()
-	job.Error = fmt.Sprintf("panic: %v", recovered)
-	s.runs.put(job)
-	log := zerowrap.FromCtx(ctx)
-	log.Error().Str("panic", job.Error).Msg("manual backup panicked")
+// runTracked runs one begun backup and records its settled state in the
+// run registry. A panic fails the run instead of leaving it running or
+// crashing the server.
+func (s *Service) runTracked(ctx context.Context, target domain.DatabaseTarget, job domain.BackupJob) (done domain.BackupJob, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			done = job
+			done.Status = domain.BackupStatusFailed
+			done.CompletedAt = time.Now().UTC()
+			done.Error = fmt.Sprintf("panic: %v", recovered)
+			err = errors.New(done.Error)
+		}
+		s.runs.put(done)
+	}()
+	return s.runJob(ctx, target, job)
 }
 
 // BackupRun returns one tracked database backup run by ID.
@@ -244,9 +242,7 @@ func (s *Service) RunForSchedule(ctx context.Context, schedule domain.BackupSche
 				Msg("scheduled backup skipped: a backup of this database is already running")
 			continue
 		}
-		job, err := s.runJob(ctx, target, job)
-		s.runs.put(job)
-		if err != nil {
+		if _, err := s.runTracked(ctx, target, job); err != nil {
 			s.log.Error().Err(err).Str("app", target.App).Str("service", target.Service).
 				Str("database", target.Database).Msg("scheduled backup failed")
 			if firstErr == nil {

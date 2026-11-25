@@ -209,18 +209,24 @@ func (s *VolumeService) finishVolumeBackup(ctx context.Context, target domain.Vo
 	defer s.failOnPanic(ctx, job)
 	job = s.runVolumeBackup(ctx, target, job)
 	if job.Status == domain.BackupStatusCompleted {
-		retentionCtx, cancel := context.WithTimeout(ctx, volumeRetentionTimeout)
-		if _, err := s.storage.ApplyVolumeRetention(retentionCtx, job.App, s.config.Retention); err != nil {
-			log := zerowrap.FromCtx(ctx)
-			log.Error().Err(err).Msg("volume backup retention failed")
-		}
-		cancel()
+		s.applyManualRetention(ctx, job.App)
 	}
 	s.runs.put(job)
 }
 
-// failOnPanic records a panic in a detached run as a failed run instead of
-// crashing the server. It must be deferred.
+// applyManualRetention applies retention to app after a manual run, under
+// its own deadline; an error is logged.
+func (s *VolumeService) applyManualRetention(ctx context.Context, app string) {
+	ctx, cancel := context.WithTimeout(ctx, volumeRetentionTimeout)
+	defer cancel()
+	if _, err := s.storage.ApplyVolumeRetention(ctx, app, s.config.Retention); err != nil {
+		log := zerowrap.FromCtx(ctx)
+		log.Error().Err(err).Msg("volume backup retention failed")
+	}
+}
+
+// failOnPanic records a panic in a run as a failed run instead of leaving
+// it running or crashing the server. It must be deferred directly.
 func (s *VolumeService) failOnPanic(ctx context.Context, job domain.VolumeBackupJob) {
 	recovered := recover()
 	if recovered == nil {
@@ -231,7 +237,7 @@ func (s *VolumeService) failOnPanic(ctx context.Context, job domain.VolumeBackup
 	job.Error = fmt.Sprintf("panic: %v", recovered)
 	s.runs.put(job)
 	log := zerowrap.FromCtx(ctx)
-	log.Error().Str("panic", job.Error).Msg("manual volume backup panicked")
+	log.Error().Str("panic", job.Error).Msg("volume backup panicked")
 }
 
 // VolumeBackupRun returns one tracked volume backup run by ID.
@@ -295,18 +301,22 @@ func (s *VolumeService) runVolumeBackupsConcurrently(ctx context.Context, target
 	sem := make(chan struct{}, limit)
 	var wg sync.WaitGroup
 	for i, target := range targets {
+		// The slot is taken before the run begins, so its start time
+		// never includes time spent waiting for a slot.
+		sem <- struct{}{}
 		job, started := s.runs.begin(s.newVolumeJob(target))
 		if !started {
+			<-sem
 			s.log.Warn().Str("app", target.App).Str("service", target.Service).
 				Str("volume", target.VolumeName).Str("job_id", job.ID).
 				Msg("scheduled volume backup skipped: a backup of this volume is already running")
 			continue
 		}
 		wg.Add(1)
-		sem <- struct{}{}
 		go func(i int, target domain.VolumeBackupTarget, job domain.VolumeBackupJob) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			defer s.failOnPanic(ctx, job)
 			jobs[i] = s.runVolumeBackup(ctx, target, job)
 			ran[i] = true
 			s.runs.put(jobs[i])
