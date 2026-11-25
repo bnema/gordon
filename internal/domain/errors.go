@@ -68,6 +68,9 @@ var (
 	ErrVolumeBackupUnavailable   = errors.New("volume backup service unavailable")
 	ErrVolumeOwnershipUnverified = errors.New("volume ownership cannot be verified")
 
+	// Backup errors
+	ErrBackupRunNotFound = errors.New("backup run not found")
+
 	// Preview errors
 	ErrPreviewNotFound = errors.New("preview not found")
 

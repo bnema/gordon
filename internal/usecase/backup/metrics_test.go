@@ -58,8 +58,8 @@ func TestVolumeService_RecordsRunMetrics(t *testing.T) {
 			storage := &fakeVolumeBackupStorage{}
 			svc := volumeTestService(t, state, &fakeVolumeArchiveExporter{err: tc.export}, storage, true).WithMetrics(metrics)
 
-			jobs, _ := svc.RunVolumeBackups(context.Background(), "shop", "api", "data")
-			require.Len(t, jobs, 1)
+			job, _ := runVolumeBackupToEnd(t, svc, "shop", "api", "data")
+			jobs := []domain.VolumeBackupJob{job}
 			require.Len(t, *runs, 1)
 			run := (*runs)[0]
 			assert.Equal(t, shopData, run.BackupTargetRef)
@@ -116,7 +116,7 @@ func TestService_RecordsRunMetrics(t *testing.T) {
 		runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.Anything).
 			Return(&out.ExecResult{ExitCode: 1, Stderr: []byte("boom")}, nil).Twice()
 
-		_, err := svc.RunBackup(context.Background(), "shop", "api", "orders")
+		_, err := runBackupToEnd(t, svc, "shop", "api", "orders")
 		require.Error(t, err)
 		require.Len(t, *runs, 1)
 		assert.Equal(t, shopOrders, (*runs)[0].BackupTargetRef)
@@ -142,7 +142,7 @@ func TestService_RecordsRunMetrics(t *testing.T) {
 				return "/b/file.bak", err
 			}).Once()
 
-		_, err := svc.RunBackup(context.Background(), "shop", "api", "orders")
+		_, err := runBackupToEnd(t, svc, "shop", "api", "orders")
 		require.NoError(t, err)
 		require.Len(t, *runs, 1)
 		assert.True(t, (*runs)[0].Succeeded)

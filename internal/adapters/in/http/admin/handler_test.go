@@ -673,7 +673,7 @@ func TestHandler_BackupsRunApp(t *testing.T) {
 	containerSvc := inmocks.NewMockContainerService(t)
 	backupSvc := inmocks.NewMockBackupService(t)
 
-	backupSvc.EXPECT().RunBackup(mock.Anything, "shop", "api", "orders").Return(&domain.BackupResult{Job: domain.BackupJob{App: "shop", Service: "api", DBName: "orders", Status: domain.BackupStatusCompleted}}, nil)
+	backupSvc.EXPECT().StartBackup(mock.Anything, "shop", "api", "orders").Return(domain.BackupJob{ID: "b1", App: "shop", Service: "api", DBName: "orders", Status: domain.BackupStatusRunning}, nil)
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
@@ -689,15 +689,14 @@ func TestHandler_BackupsRunApp(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), "completed")
+	assert.Equal(t, http.StatusAccepted, rec.Code)
+	assert.Contains(t, rec.Body.String(), "running")
 }
 
-func TestHandler_VolumeBackupsRunDomain_ReturnsPartialResults(t *testing.T) {
+func TestHandler_VolumeBackupsRunDomain_AcceptsAndReturnsTheRunningJob(t *testing.T) {
 	volumeBackupSvc := inmocks.NewMockVolumeBackupService(t)
-	runErr := errors.New("one volume failed")
-	jobs := []domain.VolumeBackupJob{{ID: "v1", App: "shop", Service: "api", VolumeName: "data", Status: domain.BackupStatusCompleted}}
-	volumeBackupSvc.EXPECT().RunVolumeBackups(mock.Anything, "shop", "api", "data").Return(jobs, runErr)
+	job := domain.VolumeBackupJob{ID: "v1", App: "shop", Service: "api", VolumeName: "data", Status: domain.BackupStatusRunning}
+	volumeBackupSvc.EXPECT().StartVolumeBackup(mock.Anything, "shop", "api", "data").Return(job, nil)
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.VolumeBackupSvc = volumeBackupSvc
@@ -710,18 +709,17 @@ func TestHandler_VolumeBackupsRunDomain_ReturnsPartialResults(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusPartialContent, rec.Code)
+	require.Equal(t, http.StatusAccepted, rec.Code)
 	var result dto.VolumeBackupRunResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
-	assert.Equal(t, "partial", result.Status)
-	assert.Equal(t, runErr.Error(), result.Error)
+	assert.Equal(t, "running", result.Status)
 	require.Len(t, result.Backups, 1)
 	assert.Equal(t, "v1", result.Backups[0].ID)
 }
 
-func TestHandler_VolumeBackupsRunDomain_ReturnsServerErrorWithoutResults(t *testing.T) {
+func TestHandler_VolumeBackupsRunDomain_ReturnsServerErrorOnStartFailure(t *testing.T) {
 	volumeBackupSvc := inmocks.NewMockVolumeBackupService(t)
-	volumeBackupSvc.EXPECT().RunVolumeBackups(mock.Anything, "shop", "", "").Return(nil, errors.New("runtime unavailable"))
+	volumeBackupSvc.EXPECT().StartVolumeBackup(mock.Anything, "shop", "", "").Return(domain.VolumeBackupJob{}, errors.New("runtime unavailable"))
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.VolumeBackupSvc = volumeBackupSvc
@@ -734,7 +732,77 @@ func TestHandler_VolumeBackupsRunDomain_ReturnsServerErrorWithoutResults(t *test
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
-	assert.Contains(t, rec.Body.String(), "failed to run volume backups")
+	assert.Contains(t, rec.Body.String(), "failed to start volume backup")
+}
+
+func TestHandler_VolumeBackupsRunDomain_DisabledIsUnavailable(t *testing.T) {
+	volumeBackupSvc := inmocks.NewMockVolumeBackupService(t)
+	volumeBackupSvc.EXPECT().StartVolumeBackup(mock.Anything, "shop", "", "").Return(domain.VolumeBackupJob{}, domain.ErrVolumeBackupUnavailable)
+
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.VolumeBackupSvc = volumeBackupSvc
+	})
+
+	req := httptest.NewRequest("POST", "/admin/backups/volumes/shop", bytes.NewBufferString(`{}`))
+	req = req.WithContext(ctxWithScopes("admin:config:write"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+}
+
+func TestHandler_VolumeBackupRun(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		path   string
+		job    domain.VolumeBackupJob
+		err    error
+		status int
+	}{
+		{"found", "/admin/backups/volumes/shop/runs/v1", domain.VolumeBackupJob{ID: "v1", App: "shop", Status: domain.BackupStatusCompleted}, nil, http.StatusOK},
+		{"other app", "/admin/backups/volumes/blog/runs/v1", domain.VolumeBackupJob{ID: "v1", App: "shop"}, nil, http.StatusNotFound},
+		{"unknown", "/admin/backups/volumes/shop/runs/v1", domain.VolumeBackupJob{}, domain.ErrBackupRunNotFound, http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			volumeBackupSvc := inmocks.NewMockVolumeBackupService(t)
+			volumeBackupSvc.EXPECT().VolumeBackupRun(mock.Anything, "v1").Return(tc.job, tc.err)
+			handler := newTestHandler(t, func(d *HandlerDeps) {
+				d.VolumeBackupSvc = volumeBackupSvc
+			})
+
+			req := httptest.NewRequest("GET", tc.path, nil)
+			req = req.WithContext(ctxWithScopes("admin:status:read"))
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			require.Equal(t, tc.status, rec.Code)
+			if tc.status == http.StatusOK {
+				var job dto.VolumeBackupJob
+				require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &job))
+				assert.Equal(t, "completed", job.Status)
+			}
+		})
+	}
+}
+
+func TestHandler_BackupRun(t *testing.T) {
+	backupSvc := inmocks.NewMockBackupService(t)
+	backupSvc.EXPECT().BackupRun(mock.Anything, "b1").Return(domain.BackupJob{ID: "b1", App: "shop", Status: domain.BackupStatusFailed, Error: "boom"}, nil)
+	handler := newTestHandler(t, func(d *HandlerDeps) {
+		d.BackupSvc = backupSvc
+	})
+
+	req := httptest.NewRequest("GET", "/admin/backups/shop/runs/b1", nil)
+	req = req.WithContext(ctxWithScopes("admin:status:read"))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var job dto.BackupJob
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &job))
+	assert.Equal(t, "failed", job.Status)
+	assert.Equal(t, "boom", job.Error)
 }
 
 func TestHandler_BackupsRunApp_ChunkedBodyIsDecoded(t *testing.T) {
@@ -743,7 +811,7 @@ func TestHandler_BackupsRunApp_ChunkedBodyIsDecoded(t *testing.T) {
 	containerSvc := inmocks.NewMockContainerService(t)
 	backupSvc := inmocks.NewMockBackupService(t)
 
-	backupSvc.EXPECT().RunBackup(mock.Anything, "shop", "api", "orders").Return(&domain.BackupResult{Job: domain.BackupJob{App: "shop", Service: "api", DBName: "orders", Status: domain.BackupStatusCompleted}}, nil)
+	backupSvc.EXPECT().StartBackup(mock.Anything, "shop", "api", "orders").Return(domain.BackupJob{ID: "b1", App: "shop", Service: "api", DBName: "orders", Status: domain.BackupStatusRunning}, nil)
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
@@ -760,8 +828,8 @@ func TestHandler_BackupsRunApp_ChunkedBodyIsDecoded(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), "completed")
+	assert.Equal(t, http.StatusAccepted, rec.Code)
+	assert.Contains(t, rec.Body.String(), "running")
 }
 
 func TestHandler_LogsRequireLogsReadAndRedact(t *testing.T) {

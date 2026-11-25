@@ -122,12 +122,17 @@ func runPostgresBackupFlow(t *testing.T, ctx context.Context, runtime *docker.Ru
 	require.Len(t, targets, 1)
 	assert.Equal(t, "postgres", targets[0].Service)
 
-	result, err := svc.RunBackup(ctx, appName, "postgres", "appdb")
+	started, err := svc.StartBackup(ctx, appName, "postgres", "appdb")
 	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.Equal(t, domain.BackupStatusCompleted, result.Job.Status)
+	var job domain.BackupJob
+	require.Eventually(t, func() bool {
+		job, err = svc.BackupRun(ctx, started.ID)
+		require.NoError(t, err)
+		return job.Status != domain.BackupStatusRunning
+	}, 2*time.Minute, 100*time.Millisecond)
+	require.Equal(t, domain.BackupStatusCompleted, job.Status, job.Error)
 
-	backupBytes, err := os.ReadFile(result.Job.FilePath)
+	backupBytes, err := os.ReadFile(job.FilePath)
 	require.NoError(t, err)
 	assert.Greater(t, len(backupBytes), 32)
 	assert.True(t, bytes.HasPrefix(backupBytes, []byte("PGDMP")), "expected pg_dump custom format header")

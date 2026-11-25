@@ -31,7 +31,9 @@ type BackupRunRequest struct {
 	Database string `json:"database,omitempty"`
 }
 
-// BackupRunResponse is returned after triggering a backup.
+// BackupRunResponse is returned when a backup is started. Status is the
+// job status: the run continues in the background, and GET
+// /admin/backups/{app}/runs/{id} reports its progress.
 type BackupRunResponse struct {
 	Status string     `json:"status"`
 	Backup *BackupJob `json:"backup,omitempty"`
@@ -67,9 +69,10 @@ type VolumeBackupRunRequest struct {
 	Volume  string `json:"volume,omitempty"`
 }
 
-// VolumeBackupRunResponse is returned after triggering a volume backup.
+// VolumeBackupRunResponse is returned when a volume backup is started.
+// Status is the job status: the run continues in the background, and GET
+// /admin/backups/volumes/{app}/runs/{id} reports its progress.
 type VolumeBackupRunResponse struct {
 	Status  string            `json:"status"`
 	Backups []VolumeBackupJob `json:"backups,omitempty"`
-	Error   string            `json:"error,omitempty"`
 }

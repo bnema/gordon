@@ -390,6 +390,80 @@ func (_c *MockControlPlane_DiffApp_Call) RunAndReturn(run func(ctx context.Conte
 	return _c
 }
 
+// GetBackupRun provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) GetBackupRun(ctx context.Context, app string, id string) (*dto.BackupJob, error) {
+	ret := _mock.Called(ctx, app, id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBackupRun")
+	}
+
+	var r0 *dto.BackupJob
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) (*dto.BackupJob, error)); ok {
+		return returnFunc(ctx, app, id)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) *dto.BackupJob); ok {
+		r0 = returnFunc(ctx, app, id)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.BackupJob)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
+		r1 = returnFunc(ctx, app, id)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockControlPlane_GetBackupRun_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBackupRun'
+type MockControlPlane_GetBackupRun_Call struct {
+	*mock.Call
+}
+
+// GetBackupRun is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+//   - id string
+func (_e *MockControlPlane_Expecter) GetBackupRun(ctx any, app any, id any) *MockControlPlane_GetBackupRun_Call {
+	return &MockControlPlane_GetBackupRun_Call{Call: _e.mock.On("GetBackupRun", ctx, app, id)}
+}
+
+func (_c *MockControlPlane_GetBackupRun_Call) Run(run func(ctx context.Context, app string, id string)) *MockControlPlane_GetBackupRun_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_GetBackupRun_Call) Return(backupJob *dto.BackupJob, err error) *MockControlPlane_GetBackupRun_Call {
+	_c.Call.Return(backupJob, err)
+	return _c
+}
+
+func (_c *MockControlPlane_GetBackupRun_Call) RunAndReturn(run func(ctx context.Context, app string, id string) (*dto.BackupJob, error)) *MockControlPlane_GetBackupRun_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetCA provides a mock function for the type MockControlPlane
 func (_mock *MockControlPlane) GetCA(ctx context.Context) (*dto.CAResponse, error) {
 	ret := _mock.Called(ctx)
@@ -764,6 +838,80 @@ func (_c *MockControlPlane_GetTrafficStatus_Call) Return(trafficStatusResponse *
 }
 
 func (_c *MockControlPlane_GetTrafficStatus_Call) RunAndReturn(run func(ctx context.Context) (*dto.TrafficStatusResponse, error)) *MockControlPlane_GetTrafficStatus_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetVolumeBackupRun provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) GetVolumeBackupRun(ctx context.Context, app string, id string) (*dto.VolumeBackupJob, error) {
+	ret := _mock.Called(ctx, app, id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetVolumeBackupRun")
+	}
+
+	var r0 *dto.VolumeBackupJob
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) (*dto.VolumeBackupJob, error)); ok {
+		return returnFunc(ctx, app, id)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) *dto.VolumeBackupJob); ok {
+		r0 = returnFunc(ctx, app, id)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.VolumeBackupJob)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
+		r1 = returnFunc(ctx, app, id)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockControlPlane_GetVolumeBackupRun_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetVolumeBackupRun'
+type MockControlPlane_GetVolumeBackupRun_Call struct {
+	*mock.Call
+}
+
+// GetVolumeBackupRun is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+//   - id string
+func (_e *MockControlPlane_Expecter) GetVolumeBackupRun(ctx any, app any, id any) *MockControlPlane_GetVolumeBackupRun_Call {
+	return &MockControlPlane_GetVolumeBackupRun_Call{Call: _e.mock.On("GetVolumeBackupRun", ctx, app, id)}
+}
+
+func (_c *MockControlPlane_GetVolumeBackupRun_Call) Run(run func(ctx context.Context, app string, id string)) *MockControlPlane_GetVolumeBackupRun_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_GetVolumeBackupRun_Call) Return(volumeBackupJob *dto.VolumeBackupJob, err error) *MockControlPlane_GetVolumeBackupRun_Call {
+	_c.Call.Return(volumeBackupJob, err)
+	return _c
+}
+
+func (_c *MockControlPlane_GetVolumeBackupRun_Call) RunAndReturn(run func(ctx context.Context, app string, id string) (*dto.VolumeBackupJob, error)) *MockControlPlane_GetVolumeBackupRun_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1585,166 +1733,6 @@ func (_c *MockControlPlane_RestartApp_Call) RunAndReturn(run func(ctx context.Co
 	return _c
 }
 
-// RunBackup provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) RunBackup(ctx context.Context, app string, service string, database string) (*dto.BackupRunResponse, error) {
-	ret := _mock.Called(ctx, app, service, database)
-
-	if len(ret) == 0 {
-		panic("no return value specified for RunBackup")
-	}
-
-	var r0 *dto.BackupRunResponse
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) (*dto.BackupRunResponse, error)); ok {
-		return returnFunc(ctx, app, service, database)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) *dto.BackupRunResponse); ok {
-		r0 = returnFunc(ctx, app, service, database)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*dto.BackupRunResponse)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string, string) error); ok {
-		r1 = returnFunc(ctx, app, service, database)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockControlPlane_RunBackup_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RunBackup'
-type MockControlPlane_RunBackup_Call struct {
-	*mock.Call
-}
-
-// RunBackup is a helper method to define mock.On call
-//   - ctx context.Context
-//   - app string
-//   - service string
-//   - database string
-func (_e *MockControlPlane_Expecter) RunBackup(ctx any, app any, service any, database any) *MockControlPlane_RunBackup_Call {
-	return &MockControlPlane_RunBackup_Call{Call: _e.mock.On("RunBackup", ctx, app, service, database)}
-}
-
-func (_c *MockControlPlane_RunBackup_Call) Run(run func(ctx context.Context, app string, service string, database string)) *MockControlPlane_RunBackup_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		var arg2 string
-		if args[2] != nil {
-			arg2 = args[2].(string)
-		}
-		var arg3 string
-		if args[3] != nil {
-			arg3 = args[3].(string)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-			arg3,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_RunBackup_Call) Return(backupRunResponse *dto.BackupRunResponse, err error) *MockControlPlane_RunBackup_Call {
-	_c.Call.Return(backupRunResponse, err)
-	return _c
-}
-
-func (_c *MockControlPlane_RunBackup_Call) RunAndReturn(run func(ctx context.Context, app string, service string, database string) (*dto.BackupRunResponse, error)) *MockControlPlane_RunBackup_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// RunVolumeBackups provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) RunVolumeBackups(ctx context.Context, app string, service string, volume string) (*dto.VolumeBackupRunResponse, error) {
-	ret := _mock.Called(ctx, app, service, volume)
-
-	if len(ret) == 0 {
-		panic("no return value specified for RunVolumeBackups")
-	}
-
-	var r0 *dto.VolumeBackupRunResponse
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) (*dto.VolumeBackupRunResponse, error)); ok {
-		return returnFunc(ctx, app, service, volume)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) *dto.VolumeBackupRunResponse); ok {
-		r0 = returnFunc(ctx, app, service, volume)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*dto.VolumeBackupRunResponse)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string, string) error); ok {
-		r1 = returnFunc(ctx, app, service, volume)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockControlPlane_RunVolumeBackups_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RunVolumeBackups'
-type MockControlPlane_RunVolumeBackups_Call struct {
-	*mock.Call
-}
-
-// RunVolumeBackups is a helper method to define mock.On call
-//   - ctx context.Context
-//   - app string
-//   - service string
-//   - volume string
-func (_e *MockControlPlane_Expecter) RunVolumeBackups(ctx any, app any, service any, volume any) *MockControlPlane_RunVolumeBackups_Call {
-	return &MockControlPlane_RunVolumeBackups_Call{Call: _e.mock.On("RunVolumeBackups", ctx, app, service, volume)}
-}
-
-func (_c *MockControlPlane_RunVolumeBackups_Call) Run(run func(ctx context.Context, app string, service string, volume string)) *MockControlPlane_RunVolumeBackups_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		var arg2 string
-		if args[2] != nil {
-			arg2 = args[2].(string)
-		}
-		var arg3 string
-		if args[3] != nil {
-			arg3 = args[3].(string)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-			arg3,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_RunVolumeBackups_Call) Return(volumeBackupRunResponse *dto.VolumeBackupRunResponse, err error) *MockControlPlane_RunVolumeBackups_Call {
-	_c.Call.Return(volumeBackupRunResponse, err)
-	return _c
-}
-
-func (_c *MockControlPlane_RunVolumeBackups_Call) RunAndReturn(run func(ctx context.Context, app string, service string, volume string) (*dto.VolumeBackupRunResponse, error)) *MockControlPlane_RunVolumeBackups_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // SetAppSecrets provides a mock function for the type MockControlPlane
 func (_mock *MockControlPlane) SetAppSecrets(ctx context.Context, app string, req dto.AppSecretSetRequest) error {
 	ret := _mock.Called(ctx, app, req)
@@ -2026,6 +2014,166 @@ func (_c *MockControlPlane_StartApp_Call) Return(appDeployResponse *dto.AppDeplo
 }
 
 func (_c *MockControlPlane_StartApp_Call) RunAndReturn(run func(ctx context.Context, app string) (*dto.AppDeployResponse, string, error)) *MockControlPlane_StartApp_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// StartBackup provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) StartBackup(ctx context.Context, app string, service string, database string) (*dto.BackupRunResponse, error) {
+	ret := _mock.Called(ctx, app, service, database)
+
+	if len(ret) == 0 {
+		panic("no return value specified for StartBackup")
+	}
+
+	var r0 *dto.BackupRunResponse
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) (*dto.BackupRunResponse, error)); ok {
+		return returnFunc(ctx, app, service, database)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) *dto.BackupRunResponse); ok {
+		r0 = returnFunc(ctx, app, service, database)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.BackupRunResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string, string) error); ok {
+		r1 = returnFunc(ctx, app, service, database)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockControlPlane_StartBackup_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'StartBackup'
+type MockControlPlane_StartBackup_Call struct {
+	*mock.Call
+}
+
+// StartBackup is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+//   - service string
+//   - database string
+func (_e *MockControlPlane_Expecter) StartBackup(ctx any, app any, service any, database any) *MockControlPlane_StartBackup_Call {
+	return &MockControlPlane_StartBackup_Call{Call: _e.mock.On("StartBackup", ctx, app, service, database)}
+}
+
+func (_c *MockControlPlane_StartBackup_Call) Run(run func(ctx context.Context, app string, service string, database string)) *MockControlPlane_StartBackup_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		var arg3 string
+		if args[3] != nil {
+			arg3 = args[3].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_StartBackup_Call) Return(backupRunResponse *dto.BackupRunResponse, err error) *MockControlPlane_StartBackup_Call {
+	_c.Call.Return(backupRunResponse, err)
+	return _c
+}
+
+func (_c *MockControlPlane_StartBackup_Call) RunAndReturn(run func(ctx context.Context, app string, service string, database string) (*dto.BackupRunResponse, error)) *MockControlPlane_StartBackup_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// StartVolumeBackup provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) StartVolumeBackup(ctx context.Context, app string, service string, volume string) (*dto.VolumeBackupRunResponse, error) {
+	ret := _mock.Called(ctx, app, service, volume)
+
+	if len(ret) == 0 {
+		panic("no return value specified for StartVolumeBackup")
+	}
+
+	var r0 *dto.VolumeBackupRunResponse
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) (*dto.VolumeBackupRunResponse, error)); ok {
+		return returnFunc(ctx, app, service, volume)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) *dto.VolumeBackupRunResponse); ok {
+		r0 = returnFunc(ctx, app, service, volume)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.VolumeBackupRunResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string, string) error); ok {
+		r1 = returnFunc(ctx, app, service, volume)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockControlPlane_StartVolumeBackup_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'StartVolumeBackup'
+type MockControlPlane_StartVolumeBackup_Call struct {
+	*mock.Call
+}
+
+// StartVolumeBackup is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+//   - service string
+//   - volume string
+func (_e *MockControlPlane_Expecter) StartVolumeBackup(ctx any, app any, service any, volume any) *MockControlPlane_StartVolumeBackup_Call {
+	return &MockControlPlane_StartVolumeBackup_Call{Call: _e.mock.On("StartVolumeBackup", ctx, app, service, volume)}
+}
+
+func (_c *MockControlPlane_StartVolumeBackup_Call) Run(run func(ctx context.Context, app string, service string, volume string)) *MockControlPlane_StartVolumeBackup_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		var arg3 string
+		if args[3] != nil {
+			arg3 = args[3].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_StartVolumeBackup_Call) Return(volumeBackupRunResponse *dto.VolumeBackupRunResponse, err error) *MockControlPlane_StartVolumeBackup_Call {
+	_c.Call.Return(volumeBackupRunResponse, err)
+	return _c
+}
+
+func (_c *MockControlPlane_StartVolumeBackup_Call) RunAndReturn(run func(ctx context.Context, app string, service string, volume string) (*dto.VolumeBackupRunResponse, error)) *MockControlPlane_StartVolumeBackup_Call {
 	_c.Call.Return(run)
 	return _c
 }

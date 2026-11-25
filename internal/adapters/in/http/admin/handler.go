@@ -406,6 +406,10 @@ func (h *Handler) handleBackups(w http.ResponseWriter, r *http.Request, path str
 		h.handleBackupsApp(w, r, backupDomain)
 		return
 	}
+	if len(parts) == 3 && parts[1] == "runs" && parts[2] != "" {
+		h.handleBackupRun(w, r, backupDomain, parts[2])
+		return
+	}
 
 	h.sendError(w, http.StatusNotFound, "route not found")
 }
@@ -425,11 +429,14 @@ func (h *Handler) handleVolumeBackups(w http.ResponseWriter, r *http.Request, pa
 	}
 	suffix := strings.TrimPrefix(path, "/backups/volumes/")
 	parts := strings.Split(suffix, "/")
-	if len(parts) != 1 || parts[0] == "" {
+	switch {
+	case len(parts) == 1 && parts[0] != "":
+		h.handleVolumeBackupsDomain(w, r, parts[0])
+	case len(parts) == 3 && parts[0] != "" && parts[1] == "runs" && parts[2] != "":
+		h.handleVolumeBackupRun(w, r, parts[0], parts[2])
+	default:
 		h.sendError(w, http.StatusNotFound, "route not found")
-		return
 	}
-	h.handleVolumeBackupsDomain(w, r, parts[0])
 }
 
 func (h *Handler) handleVolumeBackupsStatus(w http.ResponseWriter, r *http.Request) {
@@ -465,30 +472,64 @@ func (h *Handler) handleVolumeBackupsDomain(w http.ResponseWriter, r *http.Reque
 		}
 		h.sendJSON(w, http.StatusOK, dto.VolumeBackupsResponse{Backups: mapVolumeBackupJobsResponse(jobs)})
 	case http.MethodPost:
-		if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
-			h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
-			return
-		}
-		var req dto.VolumeBackupRunRequest
-		r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
-			h.sendError(w, http.StatusBadRequest, "invalid JSON")
-			return
-		}
-		jobs, err := h.volumeBackupSvc.RunVolumeBackups(ctx, backupDomain, req.Service, req.Volume)
-		backups := mapVolumeBackupJobsResponse(jobs)
-		if err != nil {
-			if len(backups) > 0 {
-				h.sendJSON(w, http.StatusPartialContent, dto.VolumeBackupRunResponse{Status: "partial", Backups: backups, Error: err.Error()})
-				return
-			}
-			h.sendError(w, http.StatusInternalServerError, "failed to run volume backups")
-			return
-		}
-		h.sendJSON(w, http.StatusOK, dto.VolumeBackupRunResponse{Status: "ok", Backups: backups})
+		h.handleVolumeBackupStart(w, r, backupDomain)
 	default:
 		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// handleVolumeBackupStart starts one declared volume backup and answers
+// 202 Accepted with the running job: the archive outlives the request.
+func (h *Handler) handleVolumeBackupStart(w http.ResponseWriter, r *http.Request, app string) {
+	ctx := r.Context()
+	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
+		return
+	}
+	var req dto.VolumeBackupRunRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		h.sendError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	job, err := h.volumeBackupSvc.StartVolumeBackup(ctx, app, req.Service, req.Volume)
+	if err != nil {
+		log := zerowrap.FromCtx(ctx)
+		log.Error().Err(err).Str("app", app).Msg("volume backup start failed")
+		if errors.Is(err, domain.ErrVolumeBackupUnavailable) {
+			h.sendError(w, http.StatusServiceUnavailable, "volume backups are disabled")
+			return
+		}
+		h.sendError(w, http.StatusInternalServerError, "failed to start volume backup")
+		return
+	}
+	h.sendJSON(w, http.StatusAccepted, dto.VolumeBackupRunResponse{
+		Status:  string(job.Status),
+		Backups: []dto.VolumeBackupJob{toVolumeBackupJobResponse(job)},
+	})
+}
+
+// handleVolumeBackupRun reports one tracked volume backup run of one app.
+func (h *Handler) handleVolumeBackupRun(w http.ResponseWriter, r *http.Request, app, id string) {
+	ctx := r.Context()
+	if r.Method != http.MethodGet {
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !HasAccess(ctx, domain.AdminResourceStatus, domain.AdminActionRead) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for status:read")
+		return
+	}
+	job, err := h.volumeBackupSvc.VolumeBackupRun(ctx, id)
+	if errors.Is(err, domain.ErrBackupRunNotFound) || err == nil && job.App != app {
+		h.sendError(w, http.StatusNotFound, "volume backup run not found")
+		return
+	}
+	if err != nil {
+		h.sendError(w, http.StatusInternalServerError, "failed to get volume backup run")
+		return
+	}
+	h.sendJSON(w, http.StatusOK, toVolumeBackupJobResponse(job))
 }
 
 func (h *Handler) handleBackupsStatus(w http.ResponseWriter, r *http.Request) {
@@ -551,22 +592,45 @@ func (h *Handler) handleBackupsAppRun(w http.ResponseWriter, r *http.Request, ap
 		return
 	}
 
-	result, err := h.backupSvc.RunBackup(ctx, app, req.Service, req.Database)
+	job, err := h.backupSvc.StartBackup(ctx, app, req.Service, req.Database)
 	if err != nil {
 		log := zerowrap.FromCtx(ctx)
-		log.Error().Err(err).Str("app", app).Msg("backup run failed")
-		h.sendError(w, http.StatusInternalServerError, "failed to run backup")
+		log.Error().Err(err).Str("app", app).Msg("backup start failed")
+		h.sendError(w, http.StatusInternalServerError, "failed to start backup")
 		return
 	}
 	log := zerowrap.FromCtx(ctx)
-	log.Info().Str("app", app).Str("service", req.Service).Str("database", req.Database).
-		Str("job_id", result.Job.ID).Msg("backup completed via admin API")
+	log.Info().Str("app", app).Str("service", job.Service).Str("database", job.DBName).
+		Str("job_id", job.ID).Msg("backup started via admin API")
 
-	job := toBackupJobResponse(result.Job)
-	h.sendJSON(w, http.StatusOK, dto.BackupRunResponse{
-		Status: "completed",
-		Backup: &job,
+	backup := toBackupJobResponse(job)
+	h.sendJSON(w, http.StatusAccepted, dto.BackupRunResponse{
+		Status: string(job.Status),
+		Backup: &backup,
 	})
+}
+
+// handleBackupRun reports one tracked database backup run of one app.
+func (h *Handler) handleBackupRun(w http.ResponseWriter, r *http.Request, app, id string) {
+	ctx := r.Context()
+	if r.Method != http.MethodGet {
+		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !HasAccess(ctx, domain.AdminResourceStatus, domain.AdminActionRead) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for status:read")
+		return
+	}
+	job, err := h.backupSvc.BackupRun(ctx, id)
+	if errors.Is(err, domain.ErrBackupRunNotFound) || err == nil && job.App != app {
+		h.sendError(w, http.StatusNotFound, "backup run not found")
+		return
+	}
+	if err != nil {
+		h.sendError(w, http.StatusInternalServerError, "failed to get backup run")
+		return
+	}
+	h.sendJSON(w, http.StatusOK, toBackupJobResponse(job))
 }
 
 func mapBackupJobsResponse(jobs []domain.BackupJob) []dto.BackupJob {

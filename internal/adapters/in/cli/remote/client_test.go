@@ -468,29 +468,47 @@ func TestParseErrorResponse_NonJSON(t *testing.T) {
 	assert.Equal(t, "plain text error", httpErr.Body)
 }
 
-func TestRunVolumeBackups_PartialContentReturnsResultAndError(t *testing.T) {
+func TestStartBackup_AcceptedAndGetBackupRun(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/admin/backups/volumes/shop", r.URL.Path)
-		require.Equal(t, http.MethodPost, r.Method)
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusPartialContent)
-		require.NoError(t, json.NewEncoder(w).Encode(dto.VolumeBackupRunResponse{
-			Status:  "partial",
-			Backups: []dto.VolumeBackupJob{{ID: "v1", App: "shop", Service: "api", VolumeName: "data", Status: "completed"}},
-			Error:   "one volume failed",
-		}))
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/admin/backups/shop":
+			w.WriteHeader(http.StatusAccepted)
+			require.NoError(t, json.NewEncoder(w).Encode(dto.BackupRunResponse{
+				Status: "running",
+				Backup: &dto.BackupJob{ID: "b1", App: "shop", Status: "running"},
+			}))
+		case r.Method == http.MethodGet && r.URL.Path == "/admin/backups/shop/runs/b1":
+			require.NoError(t, json.NewEncoder(w).Encode(dto.BackupJob{ID: "b1", App: "shop", Status: "failed", Error: "boom"}))
+		default:
+			http.NotFound(w, r)
+		}
 	}))
 	defer srv.Close()
 
 	client := NewClient(srv.URL)
-	result, err := client.RunVolumeBackups(context.Background(), "shop", "api", "data")
+	result, err := client.StartBackup(context.Background(), "shop", "api", "orders")
+	require.NoError(t, err)
+	require.NotNil(t, result.Backup)
+	assert.Equal(t, "b1", result.Backup.ID)
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "one volume failed")
-	require.NotNil(t, result)
-	assert.Equal(t, "partial", result.Status)
-	require.Len(t, result.Backups, 1)
-	assert.Equal(t, "v1", result.Backups[0].ID)
+	job, err := client.GetBackupRun(context.Background(), "shop", "b1")
+	require.NoError(t, err)
+	assert.Equal(t, "failed", job.Status)
+	assert.Equal(t, "boom", job.Error)
+}
+
+func TestGetVolumeBackupRun_NotFoundKeepsHTTPStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/admin/backups/volumes/shop/runs/v1", r.URL.Path)
+		http.Error(w, `{"error":"volume backup run not found"}`, http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	_, err := NewClient(srv.URL).GetVolumeBackupRun(context.Background(), "shop", "v1")
+	var httpErr *HTTPError
+	require.True(t, errors.As(err, &httpErr))
+	assert.Equal(t, http.StatusNotFound, httpErr.StatusCode)
 }
 
 func TestExchangeRegistryToken_AccessTokenFallback(t *testing.T) {

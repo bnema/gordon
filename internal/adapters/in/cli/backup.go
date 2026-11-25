@@ -114,12 +114,17 @@ func printBackupJobs(out io.Writer, jobs []dto.BackupJob, jsonOut bool) error {
 func newBackupRunCmd() *cobra.Command {
 	var service string
 	var database string
+	var wait bool
 	var jsonOut bool
 
 	cmd := &cobra.Command{
 		Use:   "run APP",
-		Short: "Run a database backup now",
-		Long: cliRenderMuted(`Run the declared database backup of one app service.
+		Short: "Start a database backup now",
+		Long: cliRenderMuted(`Start the declared database backup of one app service.
+
+The backup runs on the server and returns at once; --wait follows it to
+the end and fails when the backup fails. Stopping the wait never stops
+the backup.
 
 --service and --database select the target. Omitting a selector is only
 allowed when exactly one compatible target exists.`),
@@ -130,28 +135,60 @@ allowed when exactly one compatible target exists.`),
 				return err
 			}
 			defer handle.close()
-			return runBackupRun(cmd.Context(), handle.plane, args[0], service, database, cmd.OutOrStdout(), jsonOut)
+			return runBackupRun(cmd.Context(), handle.plane, args[0], service, database, wait, cmd.OutOrStdout(), jsonOut)
 		},
 	}
 
 	cmd.Flags().StringVar(&service, "service", "", "Service that declares the database")
 	cmd.Flags().StringVar(&database, "database", "", "Declared database name (optional)")
+	cmd.Flags().BoolVar(&wait, "wait", false, "Wait until the backup completes or fails")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	return cmd
 }
 
-func runBackupRun(ctx context.Context, plane ControlPlane, app, service, database string, out io.Writer, jsonOut bool) error {
-	result, err := plane.RunBackup(ctx, app, service, database)
+func runBackupRun(ctx context.Context, plane ControlPlane, app, service, database string, wait bool, out io.Writer, jsonOut bool) error {
+	result, err := plane.StartBackup(ctx, app, service, database)
 	if err != nil {
-		return fmt.Errorf("failed to run backup: %w", err)
+		return fmt.Errorf("failed to start backup: %w", err)
 	}
 	if result.Backup == nil {
-		return fmt.Errorf("backup run completed without a backup payload")
+		return fmt.Errorf("backup start returned no backup payload")
 	}
+	job := *result.Backup
+	if wait {
+		job, err = waitForBackupRun(ctx, job,
+			func(j dto.BackupJob) string { return j.Status },
+			func(ctx context.Context) (dto.BackupJob, error) {
+				next, err := plane.GetBackupRun(ctx, app, job.ID)
+				if err != nil {
+					return dto.BackupJob{}, err
+				}
+				return *next, nil
+			})
+		if err != nil {
+			return err
+		}
+	}
+	if err := printBackupRun(out, job, jsonOut); err != nil {
+		return err
+	}
+	if backupRunFailed(job.Status) {
+		return fmt.Errorf("backup %s failed: %s", job.ID, job.Error)
+	}
+	return nil
+}
+
+func printBackupRun(out io.Writer, job dto.BackupJob, jsonOut bool) error {
 	if jsonOut {
-		return writeJSON(out, result)
+		return writeJSON(out, dto.BackupRunResponse{Status: job.Status, Backup: &job})
 	}
-	return printBackupJobs(out, []dto.BackupJob{*result.Backup}, false)
+	if err := printBackupJobs(out, []dto.BackupJob{job}, false); err != nil {
+		return err
+	}
+	if backupRunSettled(job.Status) {
+		return nil
+	}
+	return cliWriteLine(out, cliRenderMuted("Backup started on the server. Follow it with: gordon backups status"))
 }
 
 func newBackupStatusCmd() *cobra.Command {
@@ -216,12 +253,17 @@ func runVolumeBackupList(ctx context.Context, plane ControlPlane, app string, ou
 func newVolumeBackupRunCmd() *cobra.Command {
 	var service string
 	var volume string
+	var wait bool
 	var jsonOut bool
 
 	cmd := &cobra.Command{
 		Use:   "run APP",
-		Short: "Run a volume backup now",
-		Long: cliRenderMuted(`Run the declared volume backup of one app service.
+		Short: "Start a volume backup now",
+		Long: cliRenderMuted(`Start the declared volume backup of one app service.
+
+The backup runs on the server and returns at once; --wait follows it to
+the end and fails when the backup fails. Stopping the wait never stops
+the backup.
 
 --service and --volume select the target. Omitting a selector is only
 allowed when exactly one compatible target exists.`),
@@ -232,31 +274,59 @@ allowed when exactly one compatible target exists.`),
 				return err
 			}
 			defer handle.close()
-			return runVolumeBackupRun(cmd.Context(), handle.plane, args[0], service, volume, cmd.OutOrStdout(), jsonOut)
+			return runVolumeBackupRun(cmd.Context(), handle.plane, args[0], service, volume, wait, cmd.OutOrStdout(), jsonOut)
 		},
 	}
 	cmd.Flags().StringVar(&service, "service", "", "Service that declares the volume")
 	cmd.Flags().StringVar(&volume, "volume", "", "Declared volume name (optional)")
+	cmd.Flags().BoolVar(&wait, "wait", false, "Wait until the backup completes or fails")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	return cmd
 }
 
-func runVolumeBackupRun(ctx context.Context, plane ControlPlane, app, service, volume string, out io.Writer, jsonOut bool) error {
-	result, err := plane.RunVolumeBackups(ctx, app, service, volume)
+func runVolumeBackupRun(ctx context.Context, plane ControlPlane, app, service, volume string, wait bool, out io.Writer, jsonOut bool) error {
+	result, err := plane.StartVolumeBackup(ctx, app, service, volume)
 	if err != nil {
-		// Partial results are reported before the error: an operator must
-		// see which volumes completed.
-		if result != nil && len(result.Backups) > 0 {
-			if printErr := printVolumeBackupJobs(out, result.Backups, jsonOut); printErr != nil {
-				return printErr
-			}
+		return fmt.Errorf("failed to start volume backup: %w", err)
+	}
+	if len(result.Backups) != 1 {
+		return fmt.Errorf("volume backup start returned %d jobs, expected 1", len(result.Backups))
+	}
+	job := result.Backups[0]
+	if wait {
+		job, err = waitForBackupRun(ctx, job,
+			func(j dto.VolumeBackupJob) string { return j.Status },
+			func(ctx context.Context) (dto.VolumeBackupJob, error) {
+				next, err := plane.GetVolumeBackupRun(ctx, app, job.ID)
+				if err != nil {
+					return dto.VolumeBackupJob{}, err
+				}
+				return *next, nil
+			})
+		if err != nil {
+			return err
 		}
-		return fmt.Errorf("failed to run volume backup: %w", err)
 	}
+	if err := printVolumeBackupRun(out, job, jsonOut); err != nil {
+		return err
+	}
+	if backupRunFailed(job.Status) {
+		return fmt.Errorf("volume backup %s failed: %s", job.ID, job.Error)
+	}
+	return nil
+}
+
+func printVolumeBackupRun(out io.Writer, job dto.VolumeBackupJob, jsonOut bool) error {
 	if jsonOut {
-		return writeJSON(out, result)
+		return writeJSON(out, dto.VolumeBackupRunResponse{Status: job.Status, Backups: []dto.VolumeBackupJob{job}})
 	}
-	return printVolumeBackupJobs(out, result.Backups, false)
+	if err := printVolumeBackupJobs(out, []dto.VolumeBackupJob{job}, false); err != nil {
+		return err
+	}
+	if backupRunSettled(job.Status) {
+		return nil
+	}
+	return cliWriteLine(out, cliRenderMuted("Volume backup started on the server. Follow it with: gordon backups volume status"))
 }
 
 func newVolumeBackupStatusCmd() *cobra.Command {

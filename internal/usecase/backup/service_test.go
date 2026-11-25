@@ -45,7 +45,7 @@ func backupTestService(t *testing.T, state *outmocks.MockAppStateReader) (*outmo
 	t.Helper()
 	runtime := outmocks.NewMockContainerRuntime(t)
 	storage := outmocks.NewMockBackupStorage(t)
-	svc := &Service{runtime: runtime, storage: storage, log: zerowrap.Default(), state: state}
+	svc := NewService(runtime, storage, domain.BackupConfig{}, zerowrap.Default()).WithAppState(state)
 	return runtime, storage, svc
 }
 
@@ -107,7 +107,6 @@ func TestService_TargetsSkipStoppedApps(t *testing.T) {
 // TestService_RunBackup_StoresUnderAppIdentity proves a run dumps from the
 // declared service container and stores the artifact under the app name.
 func TestService_RunBackup_StoresUnderAppIdentity(t *testing.T) {
-	ctx := context.Background()
 	state := outmocks.NewMockAppStateReader(t)
 	state.EXPECT().LoadIntent(mock.Anything, "shop").Return(domain.AppStopIntent{App: "shop"}, nil).Once()
 	state.EXPECT().LoadActive(mock.Anything, "shop").Return(activeWith("shop", map[string]domain.AppService{
@@ -131,13 +130,13 @@ func TestService_RunBackup_StoresUnderAppIdentity(t *testing.T) {
 			return "/backups/shop/orders/manual/file.bak", nil
 		}).Once()
 
-	result, err := svc.RunBackup(ctx, "shop", "api", "orders")
+	job, err := runBackupToEnd(t, svc, "shop", "api", "orders")
 	require.NoError(t, err)
-	assert.Equal(t, "shop", result.Job.App)
-	assert.Equal(t, "api", result.Job.Service)
-	assert.Equal(t, "orders", result.Job.DBName)
-	assert.Equal(t, int64(len("dump-bytes")), result.Job.SizeBytes)
-	assert.Equal(t, domain.BackupStatusCompleted, result.Job.Status)
+	assert.Equal(t, "shop", job.App)
+	assert.Equal(t, "api", job.Service)
+	assert.Equal(t, "orders", job.DBName)
+	assert.Equal(t, int64(len("dump-bytes")), job.SizeBytes)
+	assert.Equal(t, domain.BackupStatusCompleted, job.Status)
 }
 
 // TestService_RunBackup_SelectorRules proves the explicit-selector rules:
@@ -155,17 +154,17 @@ func TestService_RunBackup_SelectorRules(t *testing.T) {
 
 	_, _, svc := backupTestService(t, state)
 
-	_, err := svc.RunBackup(ctx, "shop", "", "")
+	_, err := svc.StartBackup(ctx, "shop", "", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ambiguous")
 	assert.Contains(t, err.Error(), "api/orders")
 	assert.Contains(t, err.Error(), "web/users")
 
-	_, err = svc.RunBackup(ctx, "shop", "api", "missing")
+	_, err = svc.StartBackup(ctx, "shop", "api", "missing")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 
-	_, err = svc.RunBackup(ctx, "shop", "missing", "orders")
+	_, err = svc.StartBackup(ctx, "shop", "missing", "orders")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
@@ -228,4 +227,51 @@ func TestService_ListBackupsUsesAppIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, jobs, 1)
 	assert.Equal(t, "shop", jobs[0].App)
+}
+
+// TestService_StartBackup_OutlivesTheCaller proves a manual database
+// backup keeps running after the caller's context is cancelled, and that
+// a second start reuses the running job.
+func TestService_StartBackup_OutlivesTheCaller(t *testing.T) {
+	state := outmocks.NewMockAppStateReader(t)
+	for range 2 {
+		state.EXPECT().LoadIntent(mock.Anything, "shop").Return(domain.AppStopIntent{App: "shop"}, nil).Once()
+		state.EXPECT().LoadActive(mock.Anything, "shop").Return(activeWith("shop", map[string]domain.AppService{
+			"api": appSpecWithDatabase("api", "orders", "daily"),
+		}, "ctr-api"), true, nil).Once()
+	}
+	runtime, storage, svc := backupTestService(t, state)
+	release := make(chan struct{})
+	runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.MatchedBy(func(cmd []string) bool {
+		return strings.Contains(cmd[2], "pg_dump")
+	})).RunAndReturn(func(context.Context, string, []string) (*out.ExecResult, error) {
+		<-release
+		return &out.ExecResult{ExitCode: 0}, nil
+	}).Once()
+	runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.Anything).Return(&out.ExecResult{ExitCode: 0}, nil).Once()
+	runtime.EXPECT().CopyFromContainer(mock.Anything, "ctr-api", mock.Anything).
+		Return(io.NopCloser(strings.NewReader("dump")), nil).Once()
+	storage.EXPECT().Store(mock.Anything, "shop", "api", "orders", domain.BackupSchedule(""), mock.Anything, mock.Anything).
+		RunAndReturn(func(ctx context.Context, _, _, _ string, _ domain.BackupSchedule, _ time.Time, data io.Reader) (string, error) {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+			_, err := io.Copy(io.Discard, data)
+			return "/b/file.bak", err
+		}).Once()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	job, err := svc.StartBackup(ctx, "shop", "api", "orders")
+	require.NoError(t, err)
+	assert.Equal(t, domain.BackupStatusRunning, job.Status)
+	again, err := svc.StartBackup(context.Background(), "shop", "api", "orders")
+	require.NoError(t, err)
+	assert.Equal(t, job.ID, again.ID)
+
+	cancel()
+	close(release)
+
+	done := awaitRun(t, svc.BackupRun, job.ID, func(j domain.BackupJob) domain.BackupJobStatus { return j.Status })
+	assert.Equal(t, domain.BackupStatusCompleted, done.Status, done.Error)
+	assert.Equal(t, "/b/file.bak", done.FilePath)
 }

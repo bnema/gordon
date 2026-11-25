@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/bnema/gordon/internal/domain"
@@ -147,14 +148,36 @@ func localAppRouteShape(parts []string) string {
 }
 
 func localBackupPathAllowed(method string, parts []string) bool {
-	if len(parts) == 2 {
-		if parts[1] == "volumes" {
-			return method == http.MethodPost
+	backupRoutes := map[string][]string{
+		"volumes":                 {http.MethodPost},
+		"{app}":                   {http.MethodGet, http.MethodPost},
+		"volumes/{app}":           {http.MethodGet, http.MethodPost},
+		"{app}/runs/{id}":         {http.MethodGet},
+		"volumes/{app}/runs/{id}": {http.MethodGet},
+	}
+	return slices.Contains(backupRoutes[localBackupRouteShape(parts[1:])], method)
+}
+
+// localBackupRouteShape maps the segments after /backups to a route shape:
+// literal segments stay, every other segment becomes a placeholder. An
+// empty segment yields no shape.
+func localBackupRouteShape(parts []string) string {
+	shape := make([]string, 0, len(parts))
+	for i, part := range parts {
+		switch {
+		case part == "":
+			return ""
+		case i == 0 && (part == "volumes" || part == "status"):
+			shape = append(shape, part)
+		case i == 1 && shape[0] == "volumes" && part == "status":
+			shape = append(shape, part)
+		case part == "runs" && i == len(parts)-2:
+			shape = append(shape, part)
+		case i == len(parts)-1 && i >= 2:
+			shape = append(shape, "{id}")
+		default:
+			shape = append(shape, "{app}")
 		}
-		return parts[1] != "" && parts[1] != "status" && (method == http.MethodGet || method == http.MethodPost)
 	}
-	if len(parts) == 3 && parts[1] == "volumes" && parts[2] != "" && parts[2] != "status" {
-		return method == http.MethodGet || method == http.MethodPost
-	}
-	return false
+	return strings.Join(shape, "/")
 }

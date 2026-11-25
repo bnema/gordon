@@ -115,25 +115,23 @@ func (_c *MockVolumeBackupService_ListVolumeBackups_Call) RunAndReturn(run func(
 	return _c
 }
 
-// RunVolumeBackups provides a mock function for the type MockVolumeBackupService
-func (_mock *MockVolumeBackupService) RunVolumeBackups(ctx context.Context, app string, service string, volume string) ([]domain.VolumeBackupJob, error) {
+// StartVolumeBackup provides a mock function for the type MockVolumeBackupService
+func (_mock *MockVolumeBackupService) StartVolumeBackup(ctx context.Context, app string, service string, volume string) (domain.VolumeBackupJob, error) {
 	ret := _mock.Called(ctx, app, service, volume)
 
 	if len(ret) == 0 {
-		panic("no return value specified for RunVolumeBackups")
+		panic("no return value specified for StartVolumeBackup")
 	}
 
-	var r0 []domain.VolumeBackupJob
+	var r0 domain.VolumeBackupJob
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) ([]domain.VolumeBackupJob, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) (domain.VolumeBackupJob, error)); ok {
 		return returnFunc(ctx, app, service, volume)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) []domain.VolumeBackupJob); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) domain.VolumeBackupJob); ok {
 		r0 = returnFunc(ctx, app, service, volume)
 	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]domain.VolumeBackupJob)
-		}
+		r0 = ret.Get(0).(domain.VolumeBackupJob)
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string, string) error); ok {
 		r1 = returnFunc(ctx, app, service, volume)
@@ -143,21 +141,21 @@ func (_mock *MockVolumeBackupService) RunVolumeBackups(ctx context.Context, app 
 	return r0, r1
 }
 
-// MockVolumeBackupService_RunVolumeBackups_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RunVolumeBackups'
-type MockVolumeBackupService_RunVolumeBackups_Call struct {
+// MockVolumeBackupService_StartVolumeBackup_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'StartVolumeBackup'
+type MockVolumeBackupService_StartVolumeBackup_Call struct {
 	*mock.Call
 }
 
-// RunVolumeBackups is a helper method to define mock.On call
+// StartVolumeBackup is a helper method to define mock.On call
 //   - ctx context.Context
 //   - app string
 //   - service string
 //   - volume string
-func (_e *MockVolumeBackupService_Expecter) RunVolumeBackups(ctx any, app any, service any, volume any) *MockVolumeBackupService_RunVolumeBackups_Call {
-	return &MockVolumeBackupService_RunVolumeBackups_Call{Call: _e.mock.On("RunVolumeBackups", ctx, app, service, volume)}
+func (_e *MockVolumeBackupService_Expecter) StartVolumeBackup(ctx any, app any, service any, volume any) *MockVolumeBackupService_StartVolumeBackup_Call {
+	return &MockVolumeBackupService_StartVolumeBackup_Call{Call: _e.mock.On("StartVolumeBackup", ctx, app, service, volume)}
 }
 
-func (_c *MockVolumeBackupService_RunVolumeBackups_Call) Run(run func(ctx context.Context, app string, service string, volume string)) *MockVolumeBackupService_RunVolumeBackups_Call {
+func (_c *MockVolumeBackupService_StartVolumeBackup_Call) Run(run func(ctx context.Context, app string, service string, volume string)) *MockVolumeBackupService_StartVolumeBackup_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -185,12 +183,78 @@ func (_c *MockVolumeBackupService_RunVolumeBackups_Call) Run(run func(ctx contex
 	return _c
 }
 
-func (_c *MockVolumeBackupService_RunVolumeBackups_Call) Return(volumeBackupJobs []domain.VolumeBackupJob, err error) *MockVolumeBackupService_RunVolumeBackups_Call {
-	_c.Call.Return(volumeBackupJobs, err)
+func (_c *MockVolumeBackupService_StartVolumeBackup_Call) Return(volumeBackupJob domain.VolumeBackupJob, err error) *MockVolumeBackupService_StartVolumeBackup_Call {
+	_c.Call.Return(volumeBackupJob, err)
 	return _c
 }
 
-func (_c *MockVolumeBackupService_RunVolumeBackups_Call) RunAndReturn(run func(ctx context.Context, app string, service string, volume string) ([]domain.VolumeBackupJob, error)) *MockVolumeBackupService_RunVolumeBackups_Call {
+func (_c *MockVolumeBackupService_StartVolumeBackup_Call) RunAndReturn(run func(ctx context.Context, app string, service string, volume string) (domain.VolumeBackupJob, error)) *MockVolumeBackupService_StartVolumeBackup_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// VolumeBackupRun provides a mock function for the type MockVolumeBackupService
+func (_mock *MockVolumeBackupService) VolumeBackupRun(ctx context.Context, id string) (domain.VolumeBackupJob, error) {
+	ret := _mock.Called(ctx, id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for VolumeBackupRun")
+	}
+
+	var r0 domain.VolumeBackupJob
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (domain.VolumeBackupJob, error)); ok {
+		return returnFunc(ctx, id)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) domain.VolumeBackupJob); ok {
+		r0 = returnFunc(ctx, id)
+	} else {
+		r0 = ret.Get(0).(domain.VolumeBackupJob)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = returnFunc(ctx, id)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockVolumeBackupService_VolumeBackupRun_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'VolumeBackupRun'
+type MockVolumeBackupService_VolumeBackupRun_Call struct {
+	*mock.Call
+}
+
+// VolumeBackupRun is a helper method to define mock.On call
+//   - ctx context.Context
+//   - id string
+func (_e *MockVolumeBackupService_Expecter) VolumeBackupRun(ctx any, id any) *MockVolumeBackupService_VolumeBackupRun_Call {
+	return &MockVolumeBackupService_VolumeBackupRun_Call{Call: _e.mock.On("VolumeBackupRun", ctx, id)}
+}
+
+func (_c *MockVolumeBackupService_VolumeBackupRun_Call) Run(run func(ctx context.Context, id string)) *MockVolumeBackupService_VolumeBackupRun_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockVolumeBackupService_VolumeBackupRun_Call) Return(volumeBackupJob domain.VolumeBackupJob, err error) *MockVolumeBackupService_VolumeBackupRun_Call {
+	_c.Call.Return(volumeBackupJob, err)
+	return _c
+}
+
+func (_c *MockVolumeBackupService_VolumeBackupRun_Call) RunAndReturn(run func(ctx context.Context, id string) (domain.VolumeBackupJob, error)) *MockVolumeBackupService_VolumeBackupRun_Call {
 	_c.Call.Return(run)
 	return _c
 }

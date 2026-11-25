@@ -46,10 +46,10 @@ gordon backups <subcommand>
 Subcommands:
 
 - `list [app]` - List stored backups, for every app or one app
-- `run <app> --service <service> --database <database>` - Run one declared
+- `run <app> --service <service> --database <database>` - Start one declared
   database backup now
-- `status` - Show stored backups plus declared targets that have no completed
-  backup yet
+- `status` - Show stored backups, running or last-failed runs, and declared
+  targets that have no completed backup yet
 
 ## gordon backups volume
 
@@ -63,8 +63,8 @@ gordon backups volume <subcommand>
 Subcommands:
 
 - `list [app]` - List completed volume backup archives
-- `run <app> --service <service> --volume <volume>` - Run one declared volume
-  backup now
+- `run <app> --service <service> --volume <volume>` - Start one declared
+  volume backup now
 - `status` - Show completed archives plus current/recent in-memory job state
 
 Volume archives are not application-consistent unless the application is
@@ -81,6 +81,26 @@ quiesced or stopped.
 
 Nothing is ever chosen by guessing.
 
+## Manual runs
+
+`run` starts the backup on the server and returns at once with the running
+job. The backup does not depend on the CLI connection: closing the terminal or
+losing the network never aborts it. Starting a target that is already being
+backed up returns the running job instead of starting a second backup.
+
+`--wait` follows the run until it completes or fails, and exits non-zero when
+the backup fails. Stopping the wait (Ctrl+C) stops only the wait.
+
+| Flag | Description |
+|------|-------------|
+| `--service` | Service that declares the database or volume |
+| `--database` / `--volume` | Declared database or volume name |
+| `--wait` | Wait until the backup completes or fails |
+| `--json` | Output as JSON |
+
+Run state is kept in server memory: `status` shows running and last-failed
+runs until the server restarts.
+
 ## Examples
 
 ```bash
@@ -94,6 +114,7 @@ gordon backups status
 gordon backups volume list
 gordon backups volume list shop
 gordon backups volume run shop --service api --volume data
+gordon backups volume run shop --service api --volume data --wait
 gordon backups volume status
 ```
 
@@ -112,6 +133,27 @@ Every list, run, and status command supports `--json`.
 
 ```bash
 gordon backups volume list --json
+```
+
+`run --json` prints the run, with its final state when `--wait` is set:
+
+```json
+{
+  "status": "running",
+  "backups": [
+    {
+      "id": "3f9a1c2b",
+      "app": "shop",
+      "service": "api",
+      "volume": "data",
+      "compression": "gzip",
+      "type": "volume_archive",
+      "status": "running",
+      "started_at": "2026-11-25T19:40:00Z",
+      "size_bytes": 0
+    }
+  ]
+}
 ```
 
 ## Required Permissions

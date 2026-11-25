@@ -41,10 +41,12 @@ type ControlPlane interface {
 
 	ListBackups(ctx context.Context, app string) ([]dto.BackupJob, error)
 	BackupStatus(ctx context.Context) ([]dto.BackupJob, error)
-	RunBackup(ctx context.Context, app, service, database string) (*dto.BackupRunResponse, error)
+	StartBackup(ctx context.Context, app, service, database string) (*dto.BackupRunResponse, error)
+	GetBackupRun(ctx context.Context, app, id string) (*dto.BackupJob, error)
 	ListVolumeBackups(ctx context.Context, app string) ([]dto.VolumeBackupJob, error)
 	VolumeBackupStatus(ctx context.Context) ([]dto.VolumeBackupJob, error)
-	RunVolumeBackups(ctx context.Context, app, service, volume string) (*dto.VolumeBackupRunResponse, error)
+	StartVolumeBackup(ctx context.Context, app, service, volume string) (*dto.VolumeBackupRunResponse, error)
+	GetVolumeBackupRun(ctx context.Context, app, id string) (*dto.VolumeBackupJob, error)
 
 	GetProcessLogs(ctx context.Context, lines int) ([]string, error)
 	StreamProcessLogs(ctx context.Context, lines int) (<-chan string, error)

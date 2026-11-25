@@ -667,9 +667,10 @@ func (c *Client) BackupStatus(ctx context.Context) ([]dto.BackupJob, error) {
 	return result.Backups, nil
 }
 
-// RunBackup runs one declared database backup of one app. service and
-// database are explicit selectors.
-func (c *Client) RunBackup(ctx context.Context, app, service, database string) (*dto.BackupRunResponse, error) {
+// StartBackup starts one declared database backup of one app. service
+// and database are explicit selectors. The server runs the backup in the
+// background and returns the running job; poll GetBackupRun for its end.
+func (c *Client) StartBackup(ctx context.Context, app, service, database string) (*dto.BackupRunResponse, error) {
 	if app == "" {
 		return nil, fmt.Errorf("app cannot be empty")
 	}
@@ -686,6 +687,22 @@ func (c *Client) RunBackup(ctx context.Context, app, service, database string) (
 	}
 
 	return &result, nil
+}
+
+// GetBackupRun returns one tracked database backup run of one app.
+func (c *Client) GetBackupRun(ctx context.Context, app, id string) (*dto.BackupJob, error) {
+	if app == "" || id == "" {
+		return nil, fmt.Errorf("app and run id cannot be empty")
+	}
+	resp, err := c.request(ctx, http.MethodGet, "/backups/"+url.PathEscape(app)+"/runs/"+url.PathEscape(id), nil)
+	if err != nil {
+		return nil, err
+	}
+	var job dto.BackupJob
+	if err := parseResponse(resp, &job); err != nil {
+		return nil, err
+	}
+	return &job, nil
 }
 
 // ListVolumeBackups returns volume backups globally or for one app.
@@ -721,9 +738,11 @@ func (c *Client) VolumeBackupStatus(ctx context.Context) ([]dto.VolumeBackupJob,
 	return result.Backups, nil
 }
 
-// RunVolumeBackups runs one declared volume backup of one app. service
-// and volume are explicit selectors.
-func (c *Client) RunVolumeBackups(ctx context.Context, app, service, volume string) (*dto.VolumeBackupRunResponse, error) {
+// StartVolumeBackup starts one declared volume backup of one app.
+// service and volume are explicit selectors. The server runs the backup
+// in the background and returns the running job; poll GetVolumeBackupRun
+// for its end.
+func (c *Client) StartVolumeBackup(ctx context.Context, app, service, volume string) (*dto.VolumeBackupRunResponse, error) {
 	if app == "" {
 		return nil, fmt.Errorf("app cannot be empty")
 	}
@@ -738,13 +757,23 @@ func (c *Client) RunVolumeBackups(ctx context.Context, app, service, volume stri
 	if err := parseResponse(resp, &result); err != nil {
 		return nil, err
 	}
-	if resp.StatusCode == http.StatusPartialContent {
-		if result.Error == "" {
-			result.Error = "volume backup run partially failed"
-		}
-		return &result, fmt.Errorf("volume backup run partially failed: %s", result.Error)
-	}
 	return &result, nil
+}
+
+// GetVolumeBackupRun returns one tracked volume backup run of one app.
+func (c *Client) GetVolumeBackupRun(ctx context.Context, app, id string) (*dto.VolumeBackupJob, error) {
+	if app == "" || id == "" {
+		return nil, fmt.Errorf("app and run id cannot be empty")
+	}
+	resp, err := c.request(ctx, http.MethodGet, "/backups/volumes/"+url.PathEscape(app)+"/runs/"+url.PathEscape(id), nil)
+	if err != nil {
+		return nil, err
+	}
+	var job dto.VolumeBackupJob
+	if err := parseResponse(resp, &job); err != nil {
+		return nil, err
+	}
+	return &job, nil
 }
 
 // GetHealth returns health status for all routes with HTTP probing.
