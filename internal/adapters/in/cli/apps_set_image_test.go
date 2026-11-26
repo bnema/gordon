@@ -40,7 +40,7 @@ func TestRunAppSetImage_PollsAcceptedToTerminalAtTheInterval(t *testing.T) {
 			}).Times(2)
 
 		var out, errOut bytes.Buffer
-		require.NoError(t, runAppSetImage(context.Background(), plane, "blog", setImageReq, &out, &errOut, false))
+		require.NoError(t, runAppSetImage(context.Background(), plane, "blog", setImageReq, true, &out, &errOut, false))
 		assert.Equal(t, []time.Duration{operationPollInterval, 2 * operationPollInterval}, polled,
 			"polls follow the configured cadence")
 		assert.Contains(t, out.String(), "key-1 blog: success")
@@ -55,7 +55,7 @@ func TestRunAppSetImage_JSONTerminalFailureExitsNonzero(t *testing.T) {
 			&dto.AppDeployResponse{Op: "key-1", App: "blog", Status: "failed", Outcome: "failed"}, nil).Once()
 
 		var out, errOut bytes.Buffer
-		err := runAppSetImage(context.Background(), plane, "blog", setImageReq, &out, &errOut, true)
+		err := runAppSetImage(context.Background(), plane, "blog", setImageReq, true, &out, &errOut, true)
 		var failed *OperationFailedError
 		require.ErrorAs(t, err, &failed)
 		var doc dto.AppDeployResponse
@@ -75,7 +75,7 @@ func TestRunAppSetImage_InterruptedWatchPrintsResume(t *testing.T) {
 		var err error
 		done := make(chan struct{})
 		go func() {
-			err = runAppSetImage(ctx, plane, "blog", setImageReq, &out, &errOut, false)
+			err = runAppSetImage(ctx, plane, "blog", setImageReq, true, &out, &errOut, false)
 			close(done)
 		}()
 		synctest.Wait()
@@ -91,7 +91,7 @@ func TestRunAppSetImage_TerminalReplayRendersWithoutPolling(t *testing.T) {
 	plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(
 		&dto.AppDeployResponse{Op: "key-1", App: "blog", Status: "success", Outcome: "success"}, "key-1", nil).Once()
 	var out, errOut bytes.Buffer
-	require.NoError(t, runAppSetImage(context.Background(), plane, "blog", setImageReq, &out, &errOut, false))
+	require.NoError(t, runAppSetImage(context.Background(), plane, "blog", setImageReq, true, &out, &errOut, false))
 	assert.Contains(t, out.String(), "success")
 }
 
@@ -102,7 +102,7 @@ func TestRunAppSetImage_ConflictIsNotRetried(t *testing.T) {
 			Response: dto.AppDeployResponse{Op: "key-1", App: "blog", Outcome: "failed"}}
 		plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(&conflict.Response, "key-1", conflict).Once()
 		var out, errOut bytes.Buffer
-		err := runAppSetImage(context.Background(), plane, "blog", setImageReq, &out, &errOut, false)
+		err := runAppSetImage(context.Background(), plane, "blog", setImageReq, true, &out, &errOut, false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "gordon apps operations show blog --key key-1")
 		assert.Contains(t, out.String(), "key-1 blog: failed")
@@ -111,7 +111,7 @@ func TestRunAppSetImage_ConflictIsNotRetried(t *testing.T) {
 		plane := appPlane(t)
 		plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(nil, "key-1", errors.New("409 Conflict: state-conflict")).Once()
 		var out, errOut bytes.Buffer
-		err := runAppSetImage(context.Background(), plane, "blog", setImageReq, &out, &errOut, false)
+		err := runAppSetImage(context.Background(), plane, "blog", setImageReq, true, &out, &errOut, false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "state-conflict")
 	})
@@ -120,7 +120,7 @@ func TestRunAppSetImage_ConflictIsNotRetried(t *testing.T) {
 		busy := &remote.HTTPError{StatusCode: 409, Status: "409 Conflict", Code: "app-busy", Body: "app has an unfinished operation"}
 		plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(nil, "key-1", busy).Once()
 		var out, errOut bytes.Buffer
-		err := runAppSetImage(context.Background(), plane, "blog", setImageReq, &out, &errOut, false)
+		err := runAppSetImage(context.Background(), plane, "blog", setImageReq, true, &out, &errOut, false)
 		require.ErrorAs(t, err, &busy)
 		assert.Contains(t, err.Error(), "app-busy")
 		assert.Contains(t, err.Error(), "new key")
@@ -130,7 +130,7 @@ func TestRunAppSetImage_ConflictIsNotRetried(t *testing.T) {
 		plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(nil, "key-1",
 			&remote.OutcomeUnknownError{Method: "POST", Path: "/apps/blog/set-image", Err: errors.New("eof")}).Once()
 		var out, errOut bytes.Buffer
-		err := runAppSetImage(context.Background(), plane, "blog", setImageReq, &out, &errOut, false)
+		err := runAppSetImage(context.Background(), plane, "blog", setImageReq, true, &out, &errOut, false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "outcome-unknown")
 		assert.Contains(t, err.Error(), "--key key-1")
@@ -145,4 +145,64 @@ func TestAppSetImageCmd_RequiresServiceAndImage(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "image")
+}
+
+func TestRunAppSetImage_NoWaitReturnsAcceptedWithoutPolling(t *testing.T) {
+	plane := appPlane(t)
+	plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(runningOp("key-1"), "key-1", nil).Once()
+	var out, errOut bytes.Buffer
+	require.NoError(t, runAppSetImage(context.Background(), plane, "blog", setImageReq, false, &out, &errOut, false))
+	plane.AssertNotCalled(t, "OperationByKey", mock.Anything, mock.Anything, mock.Anything)
+	assert.Contains(t, out.String(), "set-image of blog accepted")
+	assert.Contains(t, out.String(), "key-1")
+	assert.Contains(t, out.String(), "gordon apps operations show blog --key key-1")
+	assert.Contains(t, out.String(), "gordon apps operations watch blog --key key-1")
+}
+
+func TestRunAppSetImage_NoWaitJSONPrintsAcceptedOperation(t *testing.T) {
+	plane := appPlane(t)
+	plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(runningOp("key-1"), "key-1", nil).Once()
+	var out, errOut bytes.Buffer
+	require.NoError(t, runAppSetImage(context.Background(), plane, "blog", setImageReq, false, &out, &errOut, true))
+	dec := json.NewDecoder(bytes.NewReader(out.Bytes()))
+	var doc dto.AppDeployResponse
+	require.NoError(t, dec.Decode(&doc))
+	assert.Equal(t, "key-1", doc.Op, "the accepted operation carries its key")
+	assert.Equal(t, dto.AppStatusRunning, doc.Status)
+	assert.False(t, dec.More(), "stdout holds exactly one JSON document")
+	assert.Empty(t, errOut.String())
+}
+
+func TestRunAppSetImage_NoWaitTerminalFailureExitsNonzero(t *testing.T) {
+	plane := appPlane(t)
+	plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(
+		&dto.AppDeployResponse{Op: "key-1", App: "blog", Status: "failed", Outcome: "failed"}, "key-1", nil).Once()
+	var out, errOut bytes.Buffer
+	err := runAppSetImage(context.Background(), plane, "blog", setImageReq, false, &out, &errOut, false)
+	var failed *OperationFailedError
+	require.ErrorAs(t, err, &failed)
+}
+
+func TestRunAppSetImage_NoWaitRefusalFailsBeforeReturning(t *testing.T) {
+	t.Run("validation", func(t *testing.T) {
+		plane := appPlane(t)
+		invalid := &remote.HTTPError{StatusCode: 400, Status: "400 Bad Request", Code: "invalid-image", Body: "tag refused"}
+		plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(nil, "key-1", invalid).Once()
+		err := runAppSetImage(context.Background(), plane, "blog", setImageReq, false, &bytes.Buffer{}, &bytes.Buffer{}, false)
+		require.ErrorAs(t, err, &invalid)
+	})
+	t.Run("expected revision mismatch", func(t *testing.T) {
+		plane := appPlane(t)
+		conflict := &remote.HTTPError{StatusCode: 409, Status: "409 Conflict", Code: "state-conflict", Body: "desired state moved"}
+		plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(nil, "key-1", conflict).Once()
+		err := runAppSetImage(context.Background(), plane, "blog", setImageReq, false, &bytes.Buffer{}, &bytes.Buffer{}, false)
+		require.ErrorAs(t, err, &conflict)
+	})
+}
+
+func TestAppSetImageCmd_NoWaitFlag(t *testing.T) {
+	cmd := newAppSetImageCmd()
+	flag := cmd.Flags().Lookup("no-wait")
+	require.NotNil(t, flag)
+	assert.Equal(t, "false", flag.DefValue, "set-image waits by default")
 }

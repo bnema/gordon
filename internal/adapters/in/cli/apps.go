@@ -869,7 +869,8 @@ func newAppDeployCmd() *cobra.Command {
 
 // runAppDeploy issues one deploy mutation and, when the daemon answers 202
 // with a running journal, polls the existing by-key endpoint to terminal
-// rather than reissuing the mutation or hiding the outcome.
+// rather than reissuing the mutation or hiding the outcome. A terminal
+// non-success outcome exits nonzero.
 func runAppDeploy(ctx context.Context, plane ControlPlane, app string, req dto.AppDeployRequest, out, errOut io.Writer, jsonOut bool) error {
 	resp, key, err := plane.DeployApp(ctx, app, req)
 	if err != nil {
@@ -878,19 +879,14 @@ func runAppDeploy(ctx context.Context, plane ControlPlane, app string, req dto.A
 		}
 		return appMutationError("deploy", app, key, err)
 	}
-	if resp.Status == dto.AppStatusRunning {
-		return watchOperation(ctx, plane, app, key, resp, out, errOut, jsonOut)
-	}
-	if jsonOut {
-		return writeJSON(out, resp)
-	}
-	return renderAppDeployResponse(out, resp)
+	return finishAppMutation(ctx, plane, "deploy", app, key, resp, true, out, errOut, jsonOut)
 }
 
 // newAppSetImageCmd creates `set-image APP`: run one registry digest in one
 // service.
 func newAppSetImageCmd() *cobra.Command {
 	var req dto.AppSetImageRequest
+	var noWait bool
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "set-image APP",
@@ -899,8 +895,13 @@ func newAppSetImageCmd() *cobra.Command {
 service. The daemon accepts a desired revision whose only change is that
 service image, deploys it, and this command waits for the outcome.
 
+With --no-wait the command returns once the daemon accepts the operation
+and prints its request key; the deploy keeps running on the daemon and
+` + "`gordon apps operations show APP --key KEY`" + ` reads its outcome later.
+
 Examples:
   gordon apps set-image blog --service web --image web@sha256:<digest>
+  gordon apps set-image blog --service web --image web@sha256:<digest> --no-wait --json
   gordon apps set-image blog --service web --image web@sha256:<digest> --expected-revision rev-123 --json`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -909,12 +910,13 @@ Examples:
 				return err
 			}
 			defer handle.close()
-			return runAppSetImage(cmd.Context(), handle.plane, args[0], req, cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOut)
+			return runAppSetImage(cmd.Context(), handle.plane, args[0], req, !noWait, cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOut)
 		},
 	}
 	cmd.Flags().StringVar(&req.Service, "service", "", "Service whose image is set (required)")
 	cmd.Flags().StringVar(&req.Image, "image", "", "Image as REPOSITORY@sha256:DIGEST (required)")
 	cmd.Flags().StringVar(&req.ExpectedRevision, "expected-revision", "", "Refuse unless desired state is still at this revision")
+	cmd.Flags().BoolVar(&noWait, "no-wait", false, "Return once the daemon accepts the operation; print its key")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	_ = cmd.MarkFlagRequired("service")
 	_ = cmd.MarkFlagRequired("image")
@@ -922,9 +924,10 @@ Examples:
 }
 
 // runAppSetImage issues one set-image request and, when the daemon answers 202,
-// polls the by-key endpoint to terminal. It never retries the mutation: a
-// 409 renders the journal (or the conflict) and exits nonzero.
-func runAppSetImage(ctx context.Context, plane ControlPlane, app string, req dto.AppSetImageRequest, out, errOut io.Writer, jsonOut bool) error {
+// polls the by-key endpoint to terminal, or with wait false reports the
+// accepted operation and its key. It never retries the mutation: a 409
+// renders the journal (or the conflict) and exits nonzero.
+func runAppSetImage(ctx context.Context, plane ControlPlane, app string, req dto.AppSetImageRequest, wait bool, out, errOut io.Writer, jsonOut bool) error {
 	resp, key, err := plane.SetImageApp(ctx, app, req)
 	if err != nil {
 		if conflictErr, ok := renderAppOpConflict(out, "set-image", app, key, err, jsonOut); ok {
@@ -936,20 +939,7 @@ func runAppSetImage(ctx context.Context, plane ControlPlane, app string, req dto
 		}
 		return appMutationError("set-image", app, key, err)
 	}
-	if resp.Status == dto.AppStatusRunning {
-		return watchOperation(ctx, plane, app, key, resp, out, errOut, jsonOut)
-	}
-	if jsonOut {
-		if err := writeJSON(out, resp); err != nil {
-			return err
-		}
-	} else if err := renderAppDeployResponse(out, resp); err != nil {
-		return err
-	}
-	if resp.Outcome != domain.AppOutcomeSuccess {
-		return &OperationFailedError{App: app, Op: resp.Op, Outcome: resp.Outcome}
-	}
-	return nil
+	return finishAppMutation(ctx, plane, "set-image", app, key, resp, wait, out, errOut, jsonOut)
 }
 
 // isAppBusy reports a refusal because another operation of the app runs.

@@ -40,6 +40,26 @@ Set-image waits by polling the operation by key. Exit 0 means success;
 exit 1 means refusal or unsuccessful completion. JSON mode prints one final
 document to stdout; build, upload, and watch progress goes to stderr.
 
+### Deploying the Runner Itself
+
+When the job runs on a runner that Gordon deploys, the deploy stops that
+runner, so a job that waits for the outcome is cancelled. Pass `--no-wait`:
+set-image exits 0 once the operation is accepted and prints its key, and a
+later job reads the outcome with the same OIDC identity:
+
+```bash
+gordon apps set-image runner --service runner \
+  --image "$(jq -r .image push.json)" \
+  --remote "$GORDON_REMOTE" --no-wait --json >accepted.json
+# Later job, same OIDC subject:
+gordon apps operations show runner --key "$(jq -r .op accepted.json)" \
+  --remote "$GORDON_REMOTE" --json
+```
+
+Lookup is limited to the principal that submitted the operation (issuer and
+subject). The later job must present the same `sub` claim; claims that vary
+per job, such as a different environment, are refused as not found.
+
 ## Docker and curl
 
 Use the OIDC JWT as the Docker password. Do not enable shell tracing or

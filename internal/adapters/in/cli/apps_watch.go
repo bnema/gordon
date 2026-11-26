@@ -43,7 +43,13 @@ func (e *OperationFailedError) Error() string {
 // operationResumeCommand is the concise command that resumes polling an
 // existing operation without reissuing the mutation.
 func operationResumeCommand(app, key string) string {
-	cmd := fmt.Sprintf("gordon apps operations watch %s --key %s", app, key)
+	return operationCommand("watch", app, key)
+}
+
+// operationCommand is the `gordon apps operations VERB` command that reads an
+// existing operation by key, keeping the explicit remote when one was given.
+func operationCommand(verb, app, key string) string {
+	cmd := fmt.Sprintf("gordon apps operations %s %s --key %s", verb, app, key)
 	if remoteFlag != "" {
 		cmd += " --remote " + remoteFlag
 	}

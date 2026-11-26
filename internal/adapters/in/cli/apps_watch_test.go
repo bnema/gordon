@@ -206,3 +206,14 @@ func TestAppsOperationsWatchCmd_Flags(t *testing.T) {
 	assert.True(t, subs["show"])
 	assert.True(t, subs["watch"])
 }
+
+func TestRunAppDeploy_TerminalFailureWithoutPollingExitsNonzero(t *testing.T) {
+	plane := appPlane(t)
+	plane.EXPECT().DeployApp(mock.Anything, "blog", mock.Anything).Return(
+		&dto.AppDeployResponse{Op: "op-1", App: "blog", Status: "failed", Outcome: "failed"}, "key-1", nil).Once()
+	var out, errOut bytes.Buffer
+	err := runAppDeploy(context.Background(), plane, "blog", dto.AppDeployRequest{}, &out, &errOut, false)
+	var failed *OperationFailedError
+	require.ErrorAs(t, err, &failed)
+	assert.Contains(t, out.String(), "failed", "the terminal journal is rendered before failing")
+}
