@@ -370,7 +370,8 @@ it is terminal and prints concise progress only when the operation or step
 state changes. It never reissues the mutation. In `--json` mode stdout
 carries one final document and progress goes to stderr. Ctrl-C stops only
 local polling (the daemon-side operation keeps running) and prints the
-`gordon apps operations watch` command to resume.
+`gordon apps operations watch` command to resume. Exit 0 means success; a
+refusal or an unsuccessful outcome exits 1.
 
 ---
 

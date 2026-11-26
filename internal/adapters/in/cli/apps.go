@@ -263,13 +263,10 @@ func runAppsApplyDeploy(ctx context.Context, plane ControlPlane, apply *dto.AppA
 		}
 		return applySucceededError(apply, appMutationError("deploy", apply.App, key, err))
 	}
-	if deployResp.Status == dto.AppStatusRunning {
-		if werr := watchOperation(ctx, plane, apply.App, key, deployResp, out, errOut, false); werr != nil {
-			return applySucceededError(apply, werr)
-		}
-		return nil
+	if werr := finishAppMutation(ctx, plane, apply.App, key, deployResp, out, errOut, false); werr != nil {
+		return applySucceededError(apply, werr)
 	}
-	return renderAppDeployResponse(out, deployResp)
+	return nil
 }
 
 // runAppsApplyDeployJSON follows a chained deploy and writes exactly one final
@@ -879,7 +876,7 @@ func runAppDeploy(ctx context.Context, plane ControlPlane, app string, req dto.A
 		}
 		return appMutationError("deploy", app, key, err)
 	}
-	return finishAppMutation(ctx, plane, "deploy", app, key, resp, true, out, errOut, jsonOut)
+	return finishAppMutation(ctx, plane, app, key, resp, out, errOut, jsonOut)
 }
 
 // newAppSetImageCmd creates `set-image APP`: run one registry digest in one
@@ -939,7 +936,10 @@ func runAppSetImage(ctx context.Context, plane ControlPlane, app string, req dto
 		}
 		return appMutationError("set-image", app, key, err)
 	}
-	return finishAppMutation(ctx, plane, "set-image", app, key, resp, wait, out, errOut, jsonOut)
+	if !wait && resp.Status == dto.AppStatusRunning {
+		return renderAcceptedOperation(out, "set-image", app, key, resp, jsonOut)
+	}
+	return finishAppMutation(ctx, plane, app, key, resp, out, errOut, jsonOut)
 }
 
 // isAppBusy reports a refusal because another operation of the app runs.

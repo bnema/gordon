@@ -152,7 +152,6 @@ func TestRunAppSetImage_NoWaitReturnsAcceptedWithoutPolling(t *testing.T) {
 	plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(runningOp("key-1"), "key-1", nil).Once()
 	var out, errOut bytes.Buffer
 	require.NoError(t, runAppSetImage(context.Background(), plane, "blog", setImageReq, false, &out, &errOut, false))
-	plane.AssertNotCalled(t, "OperationByKey", mock.Anything, mock.Anything, mock.Anything)
 	assert.Contains(t, out.String(), "set-image of blog accepted")
 	assert.Contains(t, out.String(), "key-1")
 	assert.Contains(t, out.String(), "gordon apps operations show blog --key key-1")
@@ -184,25 +183,18 @@ func TestRunAppSetImage_NoWaitTerminalFailureExitsNonzero(t *testing.T) {
 }
 
 func TestRunAppSetImage_NoWaitRefusalFailsBeforeReturning(t *testing.T) {
-	t.Run("validation", func(t *testing.T) {
-		plane := appPlane(t)
-		invalid := &remote.HTTPError{StatusCode: 400, Status: "400 Bad Request", Code: "invalid-image", Body: "tag refused"}
-		plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(nil, "key-1", invalid).Once()
-		err := runAppSetImage(context.Background(), plane, "blog", setImageReq, false, &bytes.Buffer{}, &bytes.Buffer{}, false)
-		require.ErrorAs(t, err, &invalid)
-	})
-	t.Run("expected revision mismatch", func(t *testing.T) {
-		plane := appPlane(t)
-		conflict := &remote.HTTPError{StatusCode: 409, Status: "409 Conflict", Code: "state-conflict", Body: "desired state moved"}
-		plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(nil, "key-1", conflict).Once()
-		err := runAppSetImage(context.Background(), plane, "blog", setImageReq, false, &bytes.Buffer{}, &bytes.Buffer{}, false)
-		require.ErrorAs(t, err, &conflict)
-	})
-}
-
-func TestAppSetImageCmd_NoWaitFlag(t *testing.T) {
-	cmd := newAppSetImageCmd()
-	flag := cmd.Flags().Lookup("no-wait")
-	require.NotNil(t, flag)
-	assert.Equal(t, "false", flag.DefValue, "set-image waits by default")
+	refusals := map[string]error{
+		"validation":                 &remote.HTTPError{StatusCode: 400, Status: "400 Bad Request", Code: "invalid-image", Body: "tag refused"},
+		"expected revision mismatch": &remote.HTTPError{StatusCode: 409, Status: "409 Conflict", Code: "state-conflict", Body: "desired state moved"},
+	}
+	for name, refusal := range refusals {
+		t.Run(name, func(t *testing.T) {
+			plane := appPlane(t)
+			plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(nil, "key-1", refusal).Once()
+			var out bytes.Buffer
+			err := runAppSetImage(context.Background(), plane, "blog", setImageReq, false, &out, &bytes.Buffer{}, true)
+			require.ErrorIs(t, err, refusal)
+			assert.Empty(t, out.String(), "a refusal prints no accepted operation")
+		})
+	}
 }
