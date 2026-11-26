@@ -206,3 +206,22 @@ func TestAppsOperationsWatchCmd_Flags(t *testing.T) {
 	assert.True(t, subs["show"])
 	assert.True(t, subs["watch"])
 }
+
+func TestRunAppDeploy_TerminalFailureWithoutPollingExitsNonzero(t *testing.T) {
+	for _, jsonOut := range []bool{false, true} {
+		plane := appPlane(t)
+		plane.EXPECT().DeployApp(mock.Anything, "blog", mock.Anything).Return(
+			&dto.AppDeployResponse{Op: "op-1", App: "blog", Status: "failed", Outcome: "failed"}, "key-1", nil).Once()
+		var out, errOut bytes.Buffer
+		err := runAppDeploy(context.Background(), plane, "blog", dto.AppDeployRequest{}, &out, &errOut, jsonOut)
+		var failed *OperationFailedError
+		require.ErrorAs(t, err, &failed, "json=%v", jsonOut)
+		if jsonOut {
+			var doc dto.AppDeployResponse
+			require.NoError(t, json.Unmarshal(out.Bytes(), &doc), "stdout holds exactly one JSON document")
+			assert.Equal(t, "failed", doc.Outcome)
+		} else {
+			assert.Contains(t, out.String(), "failed", "the terminal journal is rendered before failing")
+		}
+	}
+}

@@ -146,6 +146,38 @@ func TestAppSetImage_OIDCModeUsesCIHostRoutes(t *testing.T) {
 	assertNoSecrets(t, stdout.String(), stderr.String())
 }
 
+func TestAppSetImage_OIDCNoWaitReturnsKeyThenShowReadsOutcome(t *testing.T) {
+	fake, _ := oidcEnv(t)
+
+	cmd := newAppSetImageCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"e2e-demo", "--service", "web", "--image", "e2e-demo@sha256:" + strings.Repeat("a", 64), "--no-wait", "--json"})
+	require.NoError(t, cmd.Execute(), stderr.String())
+
+	var accepted dto.AppDeployResponse
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &accepted))
+	assert.Equal(t, dto.AppStatusRunning, accepted.Status)
+	require.NotEmpty(t, accepted.Op, "the accepted operation carries its key")
+	assert.Equal(t, []string{"GET /auth/token", "POST /-/ci/apps/e2e-demo/set-image"}, fake.Paths(),
+		"--no-wait never polls the operation")
+
+	show := newAppsOperationsShowCmd()
+	var showOut bytes.Buffer
+	show.SetOut(&showOut)
+	show.SetErr(&bytes.Buffer{})
+	show.SetArgs([]string{"e2e-demo", "--key", accepted.Op, "--json"})
+	require.NoError(t, show.Execute())
+	var outcome dto.AppDeployResponse
+	require.NoError(t, json.Unmarshal(showOut.Bytes(), &outcome))
+	assert.Equal(t, "success", outcome.Outcome)
+	paths := fake.Paths()
+	assert.Equal(t, "GET /-/ci/apps/e2e-demo/operations/by-key/"+accepted.Op, paths[len(paths)-1],
+		"the same OIDC identity reads the outcome on the CI host")
+	assertNoSecrets(t, stdout.String(), stderr.String(), showOut.String())
+}
+
 func TestAppSetImage_OIDCAudienceFlagAndMissingAudience(t *testing.T) {
 	fake, host := oidcEnv(t)
 	orig := operationPollInterval

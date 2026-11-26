@@ -97,6 +97,22 @@ func TestRunAppsApply_DeployAcceptedPartialFailsButKeepsApply(t *testing.T) {
 	assert.Contains(t, out.String(), "boom", "the terminal journal is rendered before failing")
 }
 
+func TestRunAppsApply_TerminalDeployFailureExitsNonzero(t *testing.T) {
+	plane := appPlane(t)
+	plane.EXPECT().ApplyApp(mock.Anything, mock.Anything).Return(acceptedApply(), nil).Once()
+	plane.EXPECT().DeployApp(mock.Anything, "blog", mock.Anything).Return(&dto.AppDeployResponse{
+		Op: "op-1", App: "blog", Status: "failed", Outcome: "failed",
+		Services: map[string]dto.AppServiceResultDTO{"web": {Result: "failed", EffectiveRevision: "rev-b", Error: "boom"}},
+	}, "key-1", nil).Once()
+
+	var out, errOut bytes.Buffer
+	err := runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &errOut, appsApplyOptions{File: writeManifest(t, "x"), Deploy: true})
+	var failed *OperationFailedError
+	require.ErrorAs(t, err, &failed, "a terminal failed deploy answered without polling exits nonzero")
+	assert.Contains(t, err.Error(), "apply of blog succeeded (rev-b)")
+	assert.Contains(t, out.String(), "boom", "the terminal journal is rendered before failing")
+}
+
 func TestRunAppsApply_DeployAcceptedJSONKeepsStdoutSingleCombinedDocument(t *testing.T) {
 	shortenOperationPoll(t)
 	plane := appPlane(t)

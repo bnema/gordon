@@ -370,14 +370,15 @@ it is terminal and prints concise progress only when the operation or step
 state changes. It never reissues the mutation. In `--json` mode stdout
 carries one final document and progress goes to stderr. Ctrl-C stops only
 local polling (the daemon-side operation keeps running) and prints the
-`gordon apps operations watch` command to resume.
+`gordon apps operations watch` command to resume. Exit 0 means success; a
+refusal or an unsuccessful outcome exits 1.
 
 ---
 
 ## gordon apps set-image
 
 ```bash
-gordon apps set-image APP --service SVC --image REPO@sha256:DIGEST [--expected-revision REV] [--json]
+gordon apps set-image APP --service SVC --image REPO@sha256:DIGEST [--expected-revision REV] [--no-wait] [--json]
 ```
 
 Runs exactly one image digest from this installation's registry in one
@@ -403,6 +404,7 @@ their provenance.
 | `--service NAME` | Service whose image is set (required) |
 | `--image REF` | Image as `REPO@sha256:DIGEST` (required) |
 | `--expected-revision REV` | Refuse unless desired state is still at this revision |
+| `--no-wait` | Return once the daemon accepts the operation and print its key |
 | `--remote, -r` | Remote name or URL; use the CI host for OIDC |
 | `--oidc-audience` | Runner ID token audience; overrides `GORDON_OIDC_AUDIENCE` |
 | `--json` | Output as JSON |
@@ -415,6 +417,25 @@ When another operation of the app is still running (`app-busy`, with
 uses a new key.
 If the outcome is unknown, check it with
 `gordon apps operations show APP --key KEY` before running set-image again.
+
+### Returning Before the Deploy Ends
+
+With `--no-wait`, the command exits 0 as soon as the daemon accepts the
+operation (HTTP 202) and prints its request key. The deploy keeps running on
+the daemon; stopping the CLI or the CI job never stops it. Read the outcome
+later with the same identity:
+
+```bash
+gordon apps set-image blog --service web --image web@sha256:<digest> --no-wait --json >accepted.json
+gordon apps operations show blog --key "$(jq -r .op accepted.json)" --json
+```
+
+In JSON mode the accepted operation is printed with `status` `running`; its
+`op` is the request key. Refusals (validation, policy, `--expected-revision`,
+`app-busy`) still exit 1 before returning, and a terminal answer (HTTP 200)
+is reported as without the flag. Use `--no-wait` when the job runs on a
+workload the deploy replaces, such as a self-hosted CI runner deployed by
+Gordon.
 
 ### OIDC Mode
 
